@@ -1,11 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SetPasswordPage() {
+  return (
+    <Suspense>
+      <SetPasswordInner />
+    </Suspense>
+  );
+}
+
+function SetPasswordInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const type = searchParams.get("type");

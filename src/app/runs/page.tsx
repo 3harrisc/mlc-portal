@@ -3,6 +3,7 @@
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
 import Navigation from "@/components/Navigation";
+import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRun as deleteRunAction } from "@/app/actions/runs";
 import type { PlannedRun, CustomerKey } from "@/types/runs";
@@ -33,6 +34,9 @@ function runMatchesSearch(r: PlannedRun, q: string) {
 }
 
 export default function RunsPage() {
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+  const allowedCustomers = profile?.allowed_customers ?? [];
   const [runs, setRuns] = useState<PlannedRun[]>([]);
   const [date, setDate] = useState<string>(todayISO());
   const [customer, setCustomer] = useState<CustomerKey | "All">("All");
@@ -62,12 +66,13 @@ export default function RunsPage() {
 
   const filtered = useMemo(() => {
     return runs
+      .filter((r) => isAdmin || allowedCustomers.length === 0 || allowedCustomers.includes(r.customer))
       .filter((r) => (date ? r.date === date : true))
       .filter((r) => (customer === "All" ? true : r.customer === customer))
       .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))
       .filter((r) => runMatchesSearch(r, search))
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [runs, date, customer, vehicle, search]);
+  }, [runs, date, customer, vehicle, search, isAdmin, allowedCustomers]);
 
   const unassignedCount = useMemo(
     () => filtered.filter((r) => !r.vehicle?.trim()).length,
@@ -82,7 +87,7 @@ export default function RunsPage() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navigation />
-      <div className="max-w-6xl mx-auto p-8">
+      <div className="max-w-6xl mx-auto p-4 md:p-8">
         {/* Header */}
         <div className="flex items-end justify-between gap-4 flex-wrap">
           <div>

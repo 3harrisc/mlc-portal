@@ -83,9 +83,22 @@ export async function listUsers() {
   const admin = getAdminClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, email, full_name, role, active, created_at")
+    .select("id, email, full_name, role, active, allowed_customers, created_at")
     .order("created_at", { ascending: true });
 
   if (error) return { error: error.message, users: [] };
   return { users: data ?? [] };
+}
+
+export async function updateAllowedCustomers(userId: string, customers: string[]) {
+  await requireAdmin();
+
+  const admin = getAdminClient();
+  const { error } = await admin
+    .from("profiles")
+    .update({ allowed_customers: customers, updated_at: new Date().toISOString() })
+    .eq("id", userId);
+
+  if (error) return { error: error.message };
+  return { success: true };
 }

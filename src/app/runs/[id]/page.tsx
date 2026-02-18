@@ -643,7 +643,7 @@ export default function RunDetailPage() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navigation />
-      <div className="max-w-6xl mx-auto p-8">
+      <div className="max-w-6xl mx-auto p-4 md:p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <Link href="/runs" className="text-blue-400 underline">
             ← Back to runs
@@ -741,13 +741,9 @@ export default function RunDetailPage() {
                 </div>
               )}
 
-              <div className="mt-4 text-xs text-gray-500">
-                Rules: 55 mph cap • {Math.round((COMPLETION_RADIUS_METERS / 10)) / 100} km radius • "On site" = inside radius + stopped ≥{" "}
-                {MIN_STANDSTILL_MINS} mins • "Completed" when vehicle leaves area
-              </div>
             </div>
 
-            <div className="min-w-[280px]">
+            <div className="w-full md:min-w-[280px] md:w-auto">
               <div className="text-sm font-semibold mb-2">Vehicle snapshot</div>
               {!vehicleSnap ? (
                 <div className="text-sm text-gray-400 border border-white/10 rounded-xl p-4">
@@ -804,9 +800,6 @@ export default function RunDetailPage() {
               className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
             />
 
-            <div className="mt-4 text-xs text-gray-500">
-              Re-routing/editing stops comes later (admin only). Customers never see those buttons.
-            </div>
           </div>
         ) : (
           <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">

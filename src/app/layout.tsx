@@ -18,6 +18,11 @@ export const metadata: Metadata = {
   description: "MLC Logistics Portal — Route Planning & Live Tracking",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{

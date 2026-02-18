@@ -10,6 +10,7 @@ type Profile = {
   full_name: string | null;
   role: "admin" | "customer" | "driver";
   active: boolean;
+  allowed_customers: string[];
 };
 
 type AuthContextType = {
@@ -65,7 +66,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     async function fetchProfile(userId: string) {
       const { data } = await supabase
         .from("profiles")
-        .select("id, email, full_name, role, active")
+        .select("id, email, full_name, role, active, allowed_customers")
         .eq("id", userId)
         .single();
 

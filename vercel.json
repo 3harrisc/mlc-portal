@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/collect-vehicles",
+      "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/update-progress",
+      "schedule": "*/2 * * * *"
+    }
+  ]
+}

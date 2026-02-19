@@ -269,14 +269,13 @@ export async function GET(req: Request) {
         }
 
         // Complete while still inside if dwell threshold met
+        // Keep onSiteIdx so UI still shows "ON SITE" until vehicle leaves
         if (
           p.onSiteSinceMs != null &&
           minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
         ) {
           if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
           p.completedIdx.sort((a, b) => a - b);
-          p.onSiteIdx = null;
-          p.onSiteSinceMs = null;
         }
       } else {
         if (p.onSiteIdx === nsi && p.lastInside) {

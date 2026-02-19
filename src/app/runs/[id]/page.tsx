@@ -478,14 +478,13 @@ export default function RunDetailPage() {
             }
 
             // Complete while still inside if dwell threshold met
+            // Keep onSiteIdx so UI still shows "ON SITE" until vehicle leaves
             if (
               p.onSiteSinceMs != null &&
               minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
             ) {
               if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
               p.completedIdx.sort((a, b) => a - b);
-              p.onSiteIdx = null;
-              p.onSiteSinceMs = null;
             }
           } else {
             if (p.onSiteIdx === nsi && p.lastInside) {
@@ -565,7 +564,7 @@ export default function RunDetailPage() {
       if (i >= 0 && i < out.length) out[i] = "completed";
     }
     if (p.onSiteIdx != null && p.onSiteIdx >= 0 && p.onSiteIdx < out.length) {
-      if (out[p.onSiteIdx] !== "completed") out[p.onSiteIdx] = "on_site";
+      out[p.onSiteIdx] = "on_site";
     }
     return out;
   }, [stops, progress]);

@@ -8,9 +8,9 @@ import { useAuth } from "./AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
-  { href: "/plan-route", label: "Plan Route" },
-  { href: "/runs", label: "Runs" },
-  { href: "/reports", label: "Reports" },
+  { href: "/plan-route", label: "Plan Route", adminOnly: true },
+  { href: "/runs", label: "Runs", adminOnly: false },
+  { href: "/reports", label: "Reports", adminOnly: false },
 ];
 
 export default function Navigation() {
@@ -49,7 +49,7 @@ export default function Navigation() {
 
             {/* Desktop nav */}
             <div className="hidden md:flex items-center gap-2">
-              {navItems.map(({ href, label }) => (
+              {navItems.filter((item) => !item.adminOnly || profile?.role === "admin").map(({ href, label }) => (
                 <Link
                   key={href}
                   href={href}
@@ -120,7 +120,7 @@ export default function Navigation() {
       {/* Mobile menu dropdown */}
       {menuOpen && (
         <div className="md:hidden border-t border-white/10 bg-zinc-900 px-4 pb-4 pt-2 space-y-2">
-          {navItems.map(({ href, label }) => (
+          {navItems.filter((item) => !item.adminOnly || profile?.role === "admin").map(({ href, label }) => (
             <Link
               key={href}
               href={href}

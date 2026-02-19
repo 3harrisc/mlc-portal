@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
+import { useAuth } from "@/components/AuthProvider";
 import {
   DndContext,
   PointerSensor,
@@ -306,7 +308,16 @@ function SortableStopRow({
 }
 
 export default function PlanRoutePage() {
+  const { profile, loading: authLoading } = useAuth();
+  const router = useRouter();
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+
+  // Redirect non-admins
+  useEffect(() => {
+    if (!authLoading && profile?.role !== "admin") {
+      router.push("/");
+    }
+  }, [authLoading, profile, router]);
 
   const [customer, setCustomer] = useState<CustomerKey>("Montpellier");
   const [date, setDate] = useState<string>(() => {

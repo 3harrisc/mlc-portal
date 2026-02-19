@@ -94,7 +94,7 @@ export default function ReportsPage() {
   // Apply filters
   const filtered = useMemo(() => {
     return runs
-      .filter((r) => isAdmin || allowedCustomers.length === 0 || allowedCustomers.includes(r.customer))
+      .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
       .filter((r) => customerFilter === "All" || r.customer === customerFilter)
       .filter((r) => !vehicleFilter || r.vehicle === vehicleFilter);
   }, [runs, customerFilter, vehicleFilter]);

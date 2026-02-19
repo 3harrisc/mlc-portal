@@ -66,7 +66,7 @@ export default function RunsPage() {
 
   const filtered = useMemo(() => {
     return runs
-      .filter((r) => isAdmin || allowedCustomers.length === 0 || allowedCustomers.includes(r.customer))
+      .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
       .filter((r) => (date ? r.date === date : true))
       .filter((r) => (customer === "All" ? true : r.customer === customer))
       .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))

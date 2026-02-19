@@ -2,6 +2,38 @@ import { NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 import { normVehicle } from "@/lib/webfleet";
 
+/** Try to parse a Webfleet pos_time string into an ISO timestamp.
+ *  Webfleet may return formats like "2024-02-19 10:30:45" or "20240219103045". */
+function toISOTimestamp(raw: string | null | undefined): string | undefined {
+  if (!raw || !raw.trim()) return undefined;
+  const s = raw.trim();
+
+  // Already ISO-like (has "T")
+  if (s.includes("T")) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // "YYYY-MM-DD HH:MM:SS" — replace space with T
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) {
+    const d = new Date(s.replace(" ", "T") + "Z");
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // "YYYYMMDDHHmmss" compact format
+  if (/^\d{14}$/.test(s)) {
+    const iso = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}Z`;
+    const d = new Date(iso);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // Fallback: let Date try to parse it
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString();
+
+  return undefined;
+}
+
 /**
  * GET /api/webfleet/vehicle?vehicle=D1MLC
  *
@@ -55,7 +87,7 @@ export async function GET(req: Request) {
         lng: fuzzyData.lng,
         speedKph: fuzzyData.speed_kph ?? undefined,
         heading: fuzzyData.heading ?? undefined,
-        timestamp: fuzzyData.pos_time || fuzzyData.collected_at || undefined,
+        timestamp: toISOTimestamp(fuzzyData.pos_time) || fuzzyData.collected_at || undefined,
         cachedAt: fuzzyData.collected_at,
       });
     }
@@ -66,7 +98,7 @@ export async function GET(req: Request) {
       lng: data.lng,
       speedKph: data.speed_kph ?? undefined,
       heading: data.heading ?? undefined,
-      timestamp: data.pos_time || data.collected_at || undefined,
+      timestamp: toISOTimestamp(data.pos_time) || data.collected_at || undefined,
       cachedAt: data.collected_at,
     });
   } catch (e: unknown) {

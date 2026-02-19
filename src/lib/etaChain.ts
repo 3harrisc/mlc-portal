@@ -98,7 +98,7 @@ async function getDirectionsLeg(
 ): Promise<{ mins: number; km: number }> {
   const coords = `${from.lng},${from.lat};${to.lng},${to.lat}`;
   const url =
-    `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
+    `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
     `?access_token=${encodeURIComponent(token)}&overview=false&steps=false`;
 
   const res = await fetch(url, { cache: "no-store" });

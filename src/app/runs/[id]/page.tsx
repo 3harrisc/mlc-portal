@@ -121,7 +121,7 @@ async function geocodePostcode(postcode: string, mapboxToken: string): Promise<L
 async function getDirectionsLeg(from: LngLat, to: LngLat, mapboxToken: string): Promise<{ mins: number; km: number }> {
   const coords = `${from.lng},${from.lat};${to.lng},${to.lat}`;
   const url =
-    `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
+    `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}` +
     `?access_token=${encodeURIComponent(mapboxToken)}&overview=false&steps=false`;
 
   const res = await fetch(url, { cache: "no-store" });

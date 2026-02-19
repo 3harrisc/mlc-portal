@@ -20,7 +20,7 @@ function LoginInner() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
+  const [mode, setMode] = useState<"login" | "forgot">("login");
   const [resetSent, setResetSent] = useState(false);
 
   // Pick up error from redirect (e.g. expired callback link)
@@ -28,39 +28,6 @@ function LoginInner() {
     const urlError = searchParams.get("error");
     if (urlError) setError(urlError);
   }, [searchParams]);
-
-  async function handleSignup(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
-      return;
-    }
-
-    // Auto sign-in after signup
-    const { error: loginError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (loginError) {
-      setError("Account created! " + loginError.message);
-      setLoading(false);
-      return;
-    }
-
-    router.push("/");
-    router.refresh();
-  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -139,13 +106,7 @@ function LoginInner() {
         ) : (
           <>
             <form
-              onSubmit={
-                mode === "login"
-                  ? handleLogin
-                  : mode === "signup"
-                    ? handleSignup
-                    : handleForgotPassword
-              }
+              onSubmit={mode === "login" ? handleLogin : handleForgotPassword}
               className="space-y-4"
             >
               <div>
@@ -202,32 +163,17 @@ function LoginInner() {
                 className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
               >
                 {loading
-                  ? mode === "login"
-                    ? "Signing in..."
-                    : mode === "signup"
-                      ? "Creating account..."
-                      : "Sending..."
-                  : mode === "login"
-                    ? "Sign in"
-                    : mode === "signup"
-                      ? "Create account"
-                      : "Send reset link"}
+                  ? mode === "login" ? "Signing in..." : "Sending..."
+                  : mode === "login" ? "Sign in" : "Send reset link"}
               </button>
             </form>
 
-            {mode === "forgot" ? (
+            {mode === "forgot" && (
               <button
                 onClick={() => { setMode("login"); setResetSent(false); setError(""); }}
                 className="w-full mt-4 text-sm text-gray-500 hover:text-gray-300 transition-colors"
               >
                 Back to sign in
-              </button>
-            ) : (
-              <button
-                onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
-                className="w-full mt-4 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                {mode === "login" ? "First time? Create an account" : "Already have an account? Sign in"}
               </button>
             )}
           </>

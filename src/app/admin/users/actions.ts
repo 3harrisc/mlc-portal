@@ -35,17 +35,18 @@ export async function inviteUser(email: string, role: string) {
   // Invite user by email — Supabase creates the auth user and sends a magic link
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo: `${siteUrl}/auth/callback`,
-    data: { invite_accepted: false },
   });
 
   if (error) return { error: error.message };
 
   // The DB trigger creates a profile with role='customer'.
-  // Update to the admin-selected role if different.
-  if (role !== "customer" && data.user) {
+  // Update role and mark as invite pending.
+  if (data.user) {
+    const updates: Record<string, any> = { invite_accepted: false };
+    if (role !== "customer") updates.role = role;
     await admin
       .from("profiles")
-      .update({ role })
+      .update(updates)
       .eq("id", data.user.id);
   }
 
@@ -84,31 +85,11 @@ export async function listUsers() {
   const admin = getAdminClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, email, full_name, role, active, allowed_customers, created_at")
+    .select("id, email, full_name, role, active, allowed_customers, created_at, invite_accepted")
     .order("created_at", { ascending: true });
 
   if (error) return { error: error.message, users: [] };
-
-  // Enrich with auth data to determine invite status
-  const { data: authData } = await admin.auth.admin.listUsers();
-  const authMap = new Map<string, { invite_accepted: boolean }>();
-  for (const u of authData?.users ?? []) {
-    // invite_accepted is false only for freshly invited users who haven't set a password
-    // Existing users (who signed up before invites) won't have this field → treat as accepted
-    authMap.set(u.id, {
-      invite_accepted: (u.user_metadata as any)?.invite_accepted !== false,
-    });
-  }
-
-  const enriched = (data ?? []).map((profile) => {
-    const auth = authMap.get(profile.id);
-    return {
-      ...profile,
-      invite_accepted: auth?.invite_accepted ?? true,
-    };
-  });
-
-  return { users: enriched };
+  return { users: data ?? [] };
 }
 
 export async function resendInvite(userId: string, email: string) {
@@ -147,6 +128,21 @@ export async function deleteUser(userId: string) {
   const { error: authError } = await admin.auth.admin.deleteUser(userId);
 
   if (authError) return { error: authError.message };
+  return { success: true };
+}
+
+export async function markInviteAccepted() {
+  const supabase = await createServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  const admin = getAdminClient();
+  const { error } = await admin
+    .from("profiles")
+    .update({ invite_accepted: true, updated_at: new Date().toISOString() })
+    .eq("id", user.id);
+
+  if (error) return { error: error.message };
   return { success: true };
 }
 

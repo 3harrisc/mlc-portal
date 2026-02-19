@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
+import { markInviteAccepted } from "@/app/admin/users/actions";
 
 export default function SetPasswordPage() {
   return (
@@ -46,13 +47,17 @@ function SetPasswordInner() {
     const supabase = createClient();
     const { error: updateError } = await supabase.auth.updateUser({
       password,
-      data: { invite_accepted: true },
     });
 
     if (updateError) {
       setError(updateError.message);
       setLoading(false);
       return;
+    }
+
+    // Mark invite as accepted in profiles table
+    if (isInvite) {
+      await markInviteAccepted();
     }
 
     router.push("/");

@@ -4,9 +4,9 @@ import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
 
 // ── Constants (must match client-side page.tsx) ──────────────────────
-const COMPLETION_RADIUS_METERS = 250;
-const MIN_STANDSTILL_MINS = 5;
-const STANDSTILL_SPEED_KPH = 1;
+const COMPLETION_RADIUS_METERS = 500;
+const MIN_STANDSTILL_MINS = 3;
+const STANDSTILL_SPEED_KPH = 3;
 
 const DEFAULT_PROGRESS: ProgressState = {
   completedIdx: [],

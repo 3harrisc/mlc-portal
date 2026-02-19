@@ -25,9 +25,9 @@ type VehicleSnapshot = {
 type StopStatus = "completed" | "on_site" | "pending";
 
 // completion rules
-const COMPLETION_RADIUS_METERS = 250;
-const MIN_STANDSTILL_MINS = 5;
-const STANDSTILL_SPEED_KPH = 1;
+const COMPLETION_RADIUS_METERS = 500;
+const MIN_STANDSTILL_MINS = 3;
+const STANDSTILL_SPEED_KPH = 3;
 
 // ETA realism
 const HGV_TIME_MULTIPLIER = 1.15;

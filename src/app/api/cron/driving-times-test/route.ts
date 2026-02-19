@@ -29,7 +29,16 @@ export async function GET(req: Request) {
   const apiKey = envAny("WEBFLEET_API_KEY", "WEBFLEET_APIKEY");
 
   if (!account || !username || !password || !apiKey) {
-    return NextResponse.json({ error: "Missing Webfleet env vars" }, { status: 500 });
+    return NextResponse.json({
+      error: "Missing Webfleet env vars",
+      debug: {
+        hasAccount: !!account,
+        hasUsername: !!username,
+        hasPassword: !!password,
+        hasApiKey: !!apiKey,
+        hasCronSecret: !!cronSecret,
+      },
+    }, { status: 500 });
   }
 
   const url =

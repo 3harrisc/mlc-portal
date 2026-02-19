@@ -87,7 +87,27 @@ export async function listUsers() {
     .order("created_at", { ascending: true });
 
   if (error) return { error: error.message, users: [] };
-  return { users: data ?? [] };
+
+  // Enrich with auth data to determine invite status
+  const { data: authData } = await admin.auth.admin.listUsers();
+  const authMap = new Map<string, { last_sign_in_at: string | null; email_confirmed_at: string | null }>();
+  for (const u of authData?.users ?? []) {
+    authMap.set(u.id, {
+      last_sign_in_at: u.last_sign_in_at ?? null,
+      email_confirmed_at: u.email_confirmed_at ?? null,
+    });
+  }
+
+  const enriched = (data ?? []).map((profile) => {
+    const auth = authMap.get(profile.id);
+    return {
+      ...profile,
+      last_sign_in_at: auth?.last_sign_in_at ?? null,
+      email_confirmed_at: auth?.email_confirmed_at ?? null,
+    };
+  });
+
+  return { users: enriched };
 }
 
 export async function resendInvite(userId: string, email: string) {

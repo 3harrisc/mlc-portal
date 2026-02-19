@@ -225,18 +225,25 @@ export async function buildEtaChain(params: {
       maxSpeedKph
     );
 
-    // break insertion BEFORE the leg if it would exceed the 4h30 window
+    // Break logic: account for accumulated driving + this leg
     let insertedBreak = 0;
-    if (includeBreaks && driveSinceBreak > 0 && driveSinceBreak + driveMins > maxDriveBeforeBreakMins) {
-      insertedBreak = breakMins;
-      cursor = addMins(cursor, insertedBreak);
+    if (includeBreaks) {
+      const totalDrive = driveSinceBreak + driveMins;
+      if (totalDrive > maxDriveBeforeBreakMins) {
+        const numBreaks = Math.floor(totalDrive / maxDriveBeforeBreakMins);
+        insertedBreak = numBreaks * breakMins;
+        driveSinceBreak = totalDrive - numBreaks * maxDriveBeforeBreakMins;
+      } else {
+        driveSinceBreak = totalDrive;
+      }
+    }
+
+    if (insertedBreak > 0) {
       totalBreakMins += insertedBreak;
-      driveSinceBreak = 0;
     }
 
     const departAt = new Date(cursor);
-    cursor = addMins(cursor, driveMins);
-    driveSinceBreak += driveMins;
+    cursor = addMins(cursor, driveMins + insertedBreak);
 
     const arriveAt = new Date(cursor);
 

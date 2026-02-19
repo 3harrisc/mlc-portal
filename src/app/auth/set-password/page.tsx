@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { markInviteAccepted } from "@/app/admin/users/actions";
@@ -15,7 +15,6 @@ export default function SetPasswordPage() {
 }
 
 function SetPasswordInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const type = searchParams.get("type");
 
@@ -44,24 +43,33 @@ function SetPasswordInner() {
     }
 
     setLoading(true);
-    const supabase = createClient();
-    const { error: updateError } = await supabase.auth.updateUser({
-      password,
-    });
+    try {
+      const supabase = createClient();
+      const { error: updateError } = await supabase.auth.updateUser({
+        password,
+      });
 
-    if (updateError) {
-      setError(updateError.message);
+      if (updateError) {
+        setError(updateError.message);
+        setLoading(false);
+        return;
+      }
+
+      // Mark invite as accepted in profiles table
+      if (isInvite) {
+        try {
+          await markInviteAccepted();
+        } catch {
+          // Non-blocking — password was set successfully
+        }
+      }
+
+      // Hard redirect to ensure cookies are synced
+      window.location.href = "/";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
       setLoading(false);
-      return;
     }
-
-    // Mark invite as accepted in profiles table
-    if (isInvite) {
-      await markInviteAccepted();
-    }
-
-    router.push("/");
-    router.refresh();
   }
 
   return (

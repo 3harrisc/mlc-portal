@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 
@@ -33,6 +34,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <Script id="capture-auth-hash" strategy="beforeInteractive">
+          {`try{if(location.hash&&location.pathname.startsWith('/auth/callback')){sessionStorage.setItem('__supabase_auth_hash',location.hash.slice(1))}}catch(e){}`}
+        </Script>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

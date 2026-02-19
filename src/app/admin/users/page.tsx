@@ -16,8 +16,7 @@ type UserRow = {
   active: boolean;
   allowed_customers: string[];
   created_at: string;
-  last_sign_in_at: string | null;
-  email_confirmed_at: string | null;
+  invite_accepted: boolean;
 };
 
 export default function AdminUsersPage() {
@@ -224,13 +223,13 @@ export default function AdminUsersPage() {
                     <div className="font-semibold text-sm">{u.email}</div>
                     {u.full_name && <div className="text-xs text-gray-400">{u.full_name}</div>}
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {u.last_sign_in_at
+                      {u.invite_accepted
                         ? `Joined ${new Date(u.created_at).toLocaleDateString()}`
                         : `Invited ${new Date(u.created_at).toLocaleDateString()}`}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {!u.last_sign_in_at && (
+                    {!u.invite_accepted && (
                       <span className="text-xs font-semibold px-2 py-1 rounded bg-yellow-400/10 text-yellow-400">
                         Invite pending
                       </span>

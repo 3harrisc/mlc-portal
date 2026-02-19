@@ -46,6 +46,7 @@ function SetPasswordInner() {
     const supabase = createClient();
     const { error: updateError } = await supabase.auth.updateUser({
       password,
+      data: { invite_accepted: true },
     });
 
     if (updateError) {

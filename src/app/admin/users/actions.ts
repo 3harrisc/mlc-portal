@@ -90,6 +90,45 @@ export async function listUsers() {
   return { users: data ?? [] };
 }
 
+export async function resendInvite(userId: string, email: string) {
+  await requireAdmin();
+
+  const admin = getAdminClient();
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
+  const { error } = await admin.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${siteUrl}/auth/callback`,
+  });
+
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function deleteUser(userId: string) {
+  const currentUser = await requireAdmin();
+
+  // Prevent self-deletion
+  if (currentUser.id === userId) {
+    return { error: "You cannot delete your own account" };
+  }
+
+  const admin = getAdminClient();
+
+  // Delete profile first (foreign key on auth.users)
+  const { error: profileError } = await admin
+    .from("profiles")
+    .delete()
+    .eq("id", userId);
+
+  if (profileError) return { error: profileError.message };
+
+  // Delete auth user
+  const { error: authError } = await admin.auth.admin.deleteUser(userId);
+
+  if (authError) return { error: authError.message };
+  return { success: true };
+}
+
 export async function updateAllowedCustomers(userId: string, customers: string[]) {
   await requireAdmin();
 

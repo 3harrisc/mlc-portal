@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { inviteUser, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers } from "./actions";
+import { inviteUser, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
 
 const ALL_CUSTOMERS = ["Montpellier", "Customer A", "Customer B", "Consolid8", "Ashwood"];
 
@@ -88,6 +88,28 @@ export default function AdminUsersPage() {
 
   async function handleToggleActive(userId: string, currentActive: boolean) {
     const result = await toggleUserActive(userId, !currentActive);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    await loadUsers();
+  }
+
+  async function handleResendInvite(userId: string, email: string) {
+    const result = await resendInvite(userId, email);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setError("");
+    alert("Invite email resent to " + email);
+  }
+
+  async function handleDeleteUser(userId: string, email: string) {
+    if (!confirm(`Are you sure you want to permanently delete ${email}? This cannot be undone.`)) {
+      return;
+    }
+    const result = await deleteUser(userId);
     if (result.error) {
       setError(result.error);
       return;
@@ -239,6 +261,20 @@ export default function AdminUsersPage() {
                     }`}
                   >
                     {u.active ? "Disable" : "Enable"}
+                  </button>
+
+                  <button
+                    onClick={() => handleResendInvite(u.id, u.email)}
+                    className="mt-5 text-xs px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors"
+                  >
+                    Resend Invite
+                  </button>
+
+                  <button
+                    onClick={() => handleDeleteUser(u.id, u.email)}
+                    className="mt-5 text-xs px-3 py-1.5 rounded-lg border border-red-400/30 text-red-400 hover:bg-red-400/10 transition-colors"
+                  >
+                    Delete
                   </button>
                 </div>
 

@@ -9,7 +9,7 @@ import { deleteRun as deleteRunAction } from "@/app/actions/runs";
 import type { PlannedRun, CustomerKey } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
-import { CUSTOMERS } from "@/lib/customers";
+import { fetchCustomerNames } from "@/lib/customers";
 
 function norm(s: string) {
   return (s || "").trim().toUpperCase().replace(/\s+/g, " ");
@@ -37,6 +37,7 @@ export default function RunsPage() {
   const [vehicle, setVehicle] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [customerNames, setCustomerNames] = useState<string[]>([]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -48,6 +49,7 @@ export default function RunsPage() {
         setRuns((data ?? []).map(rowToRun));
         setLoading(false);
       });
+    fetchCustomerNames().then(setCustomerNames);
   }, []);
 
   const vehicles = useMemo(() => {
@@ -121,7 +123,7 @@ export default function RunsPage() {
               className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
             >
               <option value="All" className="bg-black">All</option>
-              {CUSTOMERS.map((c) => (
+              {customerNames.map((c) => (
                 <option key={c} value={c} className="bg-black">{c}</option>
               ))}
             </select>

@@ -1,28 +1,20 @@
-import type { CustomerKey } from "@/types/runs";
+import { createClient } from "@/lib/supabase/client";
+import type { Customer } from "@/types/runs";
 
-export const CUSTOMERS: CustomerKey[] = [
-  "Montpellier",
-  "Customer A",
-  "Customer B",
-  "Consolid8",
-  "Ashwood",
-];
+export const DEFAULT_BASE = "GL2 7ND";
 
-export const CUSTOMER_OPENING_PRESETS: Record<CustomerKey, { open: string; close: string }> = {
-  Montpellier: { open: "08:00", close: "17:00" },
-  "Customer A": { open: "08:00", close: "17:00" },
-  "Customer B": { open: "08:00", close: "17:00" },
-  Consolid8: { open: "06:00", close: "18:00" },
-  Ashwood: { open: "08:00", close: "17:00" },
-};
+/** Fetch all customers from DB, sorted by name */
+export async function fetchCustomers(): Promise<Customer[]> {
+  const supabase = createClient();
+  const { data } = await supabase
+    .from("customers")
+    .select("id, name, base_postcode, open_time, close_time")
+    .order("name", { ascending: true });
+  return data ?? [];
+}
 
-export const CUSTOMER_BASE_POSTCODES: Partial<Record<CustomerKey, string>> = {
-  Montpellier: "GL2 7ND",
-  Ashwood: "CF44 8ER",
-};
-
-export const DEFAULT_BASE = "GL2 7ND"; // Montpellier base
-
-export function getDefaultOpeningForCustomer(customer: CustomerKey) {
-  return CUSTOMER_OPENING_PRESETS[customer] ?? { open: "08:00", close: "17:00" };
+/** Get customer names as a string array (for dropdowns) */
+export async function fetchCustomerNames(): Promise<string[]> {
+  const customers = await fetchCustomers();
+  return customers.map((c) => c.name);
 }

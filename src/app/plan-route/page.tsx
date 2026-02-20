@@ -25,7 +25,8 @@ import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplat
 import type { PlannedRun, CustomerKey, RouteTemplate } from "@/types/runs";
 import { rowToRun, rowToTemplate } from "@/types/runs";
 import { HGV_TIME_MULTIPLIER, MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS, DEFAULT_SERVICE_MINS, DEFAULT_START_TIME } from "@/lib/constants";
-import { CUSTOMERS, CUSTOMER_BASE_POSTCODES, DEFAULT_BASE, getDefaultOpeningForCustomer } from "@/lib/customers";
+import { fetchCustomers, DEFAULT_BASE } from "@/lib/customers";
+import type { Customer } from "@/types/runs";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { haversineKm, type LngLat } from "@/lib/geo-utils";
 import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
@@ -260,6 +261,7 @@ export default function PlanRoutePage() {
     }
   }, [authLoading, profile, router]);
 
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [customer, setCustomer] = useState<CustomerKey>("Montpellier");
   const [date, setDate] = useState<string>(() => {
     const d = new Date();
@@ -333,6 +335,8 @@ export default function PlanRoutePage() {
       .then(({ data }) => {
         setPlannedRuns((data ?? []).map(rowToRun));
       });
+
+    fetchCustomers().then(setAllCustomers);
   }, []);
 
   // Keep to=from when returnToBase
@@ -371,7 +375,8 @@ export default function PlanRoutePage() {
   function parseStopsFromText() {
     const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const parsed: Stop[] = [];
-    const defOpen = getDefaultOpeningForCustomer(customer);
+    const cust = allCustomers.find((c) => c.name === customer);
+    const defOpen = { open: cust?.open_time ?? "08:00", close: cust?.close_time ?? "17:00" };
 
     for (const line of lines) {
       const { postcode, time } = extractPostcodeAndTime(line);
@@ -914,8 +919,9 @@ export default function PlanRoutePage() {
     }
   }, [mapMode]);
 
-  const customerOptions = CUSTOMERS;
-  const opening = getDefaultOpeningForCustomer(customer);
+  const customerOptions = allCustomers.map((c) => c.name);
+  const currentCust = allCustomers.find((c) => c.name === customer);
+  const opening = { open: currentCust?.open_time ?? "08:00", close: currentCust?.close_time ?? "17:00" };
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -931,7 +937,7 @@ export default function PlanRoutePage() {
 
           <div>
             <label className="block text-sm font-semibold mb-2">Customer</label>
-            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const base = CUSTOMER_BASE_POSTCODES[c]; if (base) setFromPostcode(base); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
+            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const cObj = allCustomers.find((x) => x.name === c); if (cObj?.base_postcode) setFromPostcode(cObj.base_postcode); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
               {customerOptions.map((c) => (<option key={c} value={c} className="bg-black">{c}</option>))}
             </select>
             <div className="text-xs text-gray-400 mt-2">Customer controls who can view later. Routing uses From/To.</div>

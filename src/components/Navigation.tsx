@@ -64,16 +64,28 @@ export default function Navigation() {
               ))}
 
               {profile?.role === "admin" && (
-                <Link
-                  href="/admin/users"
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    isActive("/admin")
-                      ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
-                      : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
-                  }`}
-                >
-                  Admin
-                </Link>
+                <>
+                  <Link
+                    href="/admin/users"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/users")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Users
+                  </Link>
+                  <Link
+                    href="/admin/customers"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/customers")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Customers
+                  </Link>
+                </>
               )}
             </div>
           </div>
@@ -136,17 +148,30 @@ export default function Navigation() {
           ))}
 
           {profile?.role === "admin" && (
-            <Link
-              href="/admin/users"
-              onClick={() => setMenuOpen(false)}
-              className={`block px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                isActive("/admin")
-                  ? "bg-emerald-600 text-white"
-                  : "text-gray-300 hover:bg-white/10 hover:text-white"
-              }`}
-            >
-              Admin
-            </Link>
+            <>
+              <Link
+                href="/admin/users"
+                onClick={() => setMenuOpen(false)}
+                className={`block px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive("/admin/users")
+                    ? "bg-emerald-600 text-white"
+                    : "text-gray-300 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                Users
+              </Link>
+              <Link
+                href="/admin/customers"
+                onClick={() => setMenuOpen(false)}
+                className={`block px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive("/admin/customers")
+                    ? "bg-emerald-600 text-white"
+                    : "text-gray-300 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                Customers
+              </Link>
+            </>
           )}
 
           {user && (

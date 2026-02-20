@@ -1,4 +1,12 @@
-export type CustomerKey = "Montpellier" | "Customer A" | "Customer B" | "Consolid8" | "Ashwood";
+export type CustomerKey = string;
+
+export type Customer = {
+  id: string;
+  name: string;
+  base_postcode: string;
+  open_time: string;
+  close_time: string;
+};
 
 export type PlannedRun = {
   id: string;

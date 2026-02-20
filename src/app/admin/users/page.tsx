@@ -5,9 +5,7 @@ import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { inviteUser, createUserWithPassword, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
-import { CUSTOMERS } from "@/lib/customers";
-
-const ALL_CUSTOMERS = CUSTOMERS;
+import { fetchCustomerNames } from "@/lib/customers";
 
 type UserRow = {
   id: string;
@@ -25,6 +23,7 @@ export default function AdminUsersPage() {
   const router = useRouter();
 
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [customerNames, setCustomerNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -44,10 +43,11 @@ export default function AdminUsersPage() {
     }
   }, [authLoading, profile, router]);
 
-  // Load users
+  // Load users + customer names
   useEffect(() => {
     if (profile?.role === "admin") {
       loadUsers();
+      fetchCustomerNames().then(setCustomerNames);
     }
   }, [profile]);
 
@@ -355,7 +355,7 @@ export default function AdminUsersPage() {
                   <div className="mt-3 pt-3 border-t border-white/5">
                     <div className="text-xs text-gray-400 mb-2">Allowed customers</div>
                     <div className="flex flex-wrap gap-2">
-                      {ALL_CUSTOMERS.map((c) => {
+                      {customerNames.map((c) => {
                         const allowed = u.allowed_customers ?? [];
                         const isSelected = allowed.includes(c);
                         return (

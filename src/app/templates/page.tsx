@@ -7,6 +7,7 @@ import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplat
 import { createRuns as createRunsAction, nextJobNumber } from "@/app/actions/runs";
 import type { PlannedRun, RouteTemplate, CustomerKey, Weekdays } from "@/types/runs";
 import { rowToTemplate } from "@/types/runs";
+import { fetchCustomerNames } from "@/lib/customers";
 
 const DEFAULT_WEEKDAYS: Weekdays = { mon: true, tue: true, wed: true, thu: true, fri: true };
 
@@ -59,6 +60,7 @@ function getWeekdays(t: RouteTemplate): Weekdays {
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<RouteTemplate[]>([]);
+  const [customerNames, setCustomerNames] = useState<string[]>([]);
   const [runsCount, setRunsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -90,6 +92,7 @@ export default function TemplatesPage() {
       setRunsCount(rRes.count ?? 0);
       setLoading(false);
     });
+    fetchCustomerNames().then(setCustomerNames);
   }, []);
 
   function flash(text: string) {
@@ -224,10 +227,9 @@ export default function TemplatesPage() {
                 onChange={(e) => setCustomer(e.target.value as CustomerKey)}
                 className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
               >
-                <option className="bg-black" value="Montpellier">Montpellier</option>
-                <option className="bg-black" value="Customer A">Customer A</option>
-                <option className="bg-black" value="Customer B">Customer B</option>
-                <option className="bg-black" value="Consolid8">Consolid8</option>
+                {customerNames.map((c) => (
+                  <option key={c} className="bg-black" value={c}>{c}</option>
+                ))}
               </select>
             </div>
 

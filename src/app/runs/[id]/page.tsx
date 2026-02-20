@@ -25,7 +25,7 @@ type VehicleSnapshot = {
 type StopStatus = "completed" | "on_site" | "pending";
 
 // completion rules
-const COMPLETION_RADIUS_METERS = 500;
+const COMPLETION_RADIUS_METERS = 800;
 const MIN_STANDSTILL_MINS = 3;
 const STANDSTILL_SPEED_KPH = 3;
 

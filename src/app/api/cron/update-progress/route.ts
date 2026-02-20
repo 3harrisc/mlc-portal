@@ -4,7 +4,7 @@ import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
 
 // ── Constants (must match client-side page.tsx) ──────────────────────
-const COMPLETION_RADIUS_METERS = 500;
+const COMPLETION_RADIUS_METERS = 800;
 const MIN_STANDSTILL_MINS = 3;
 const STANDSTILL_SPEED_KPH = 3;
 

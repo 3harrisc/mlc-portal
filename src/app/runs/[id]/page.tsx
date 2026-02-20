@@ -1,15 +1,30 @@
 "use client";
 
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { buildEtaChain, type EtaChainResult } from "@/lib/etaChain";
 import { createClient } from "@/lib/supabase/client";
-import { updateRun as updateRunAction } from "@/app/actions/runs";
+import { updateRun as updateRunAction, deleteRun as deleteRunAction } from "@/app/actions/runs";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 type LngLat = { lng: number; lat: number };
 
@@ -166,14 +181,52 @@ function etaFromNowPlusMinutes(totalMins: number) {
   return { hhmm, etaDate, afterHours: minsOfDay >= AFTER_HOURS_CUTOFF_MINS };
 }
 
+function SortableStopRow({ id, postcode, index }: { id: string; postcode: string; index: number }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.7 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center gap-3 border border-white/10 rounded-xl p-3 bg-white/5"
+    >
+      <button
+        className="w-8 h-8 rounded-lg border border-white/10 bg-black/30 flex items-center justify-center cursor-grab"
+        title="Drag to reorder"
+        {...attributes}
+        {...listeners}
+      >
+        ☰
+      </button>
+      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-semibold text-sm">
+        {index + 1}
+      </div>
+      <div className="font-semibold">{postcode}</div>
+    </div>
+  );
+}
+
 export default function RunDetailPage() {
   const params = useParams();
   const runId = params?.id as string;
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
+  const router = useRouter();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
+
+  const [editingOrder, setEditingOrder] = useState(false);
+  const [editStops, setEditStops] = useState<{ id: string; postcode: string }[]>([]);
+  const [reRouting, setReRouting] = useState(false);
+
+  const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const [run, setRun] = useState<PlannedRun | null>(null);
   const [runLoading, setRunLoading] = useState(true);
@@ -618,6 +671,98 @@ export default function RunDetailPage() {
     setEtaDetails(null);
   }
 
+  async function handleDeleteRun() {
+    if (!run || !isAdmin) return;
+    if (!confirm("Are you sure you want to delete this run? This cannot be undone.")) return;
+    const result = await deleteRunAction(run.id);
+    if (result.error) {
+      alert("Failed to delete run: " + result.error);
+      return;
+    }
+    router.push("/runs");
+  }
+
+  async function handleReRoute() {
+    if (!run || !isAdmin || !mapboxToken) return;
+    if (!confirm("This will re-optimize the stop order and reset all delivery progress. Continue?")) return;
+    setReRouting(true);
+    try {
+      const fromPC = normalizePostcode(run.fromPostcode);
+      const allCoords = await ensureCoords([fromPC, ...stops]);
+      const startLL = allCoords[fromPC];
+
+      // Nearest-neighbor ordering
+      const remaining = stops.slice();
+      const ordered: string[] = [];
+      let current = startLL;
+
+      while (remaining.length) {
+        let bestIdx = 0;
+        let bestD = Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+          const ll = allCoords[remaining[i]];
+          if (!ll) continue;
+          const d = haversineMeters(current, ll);
+          if (d < bestD) {
+            bestD = d;
+            bestIdx = i;
+          }
+        }
+        const next = remaining.splice(bestIdx, 1)[0];
+        ordered.push(next);
+        current = allCoords[next];
+      }
+
+      const newRawText = ordered.join("\n");
+      const resetProgress: ProgressState = { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false };
+      await updateRunAction(run.id, { rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
+      setRun({ ...run, rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
+      setProgress(resetProgress);
+      progressRef.current = resetProgress;
+      setEtaText("—");
+      setEtaDetails(null);
+    } catch (e: any) {
+      alert("Re-route failed: " + (e?.message || "Unknown error"));
+    } finally {
+      setReRouting(false);
+    }
+  }
+
+  function handleStartEditOrder() {
+    if (!isAdmin) return;
+    setEditStops(stops.map((pc, i) => ({ id: `stop-${i}`, postcode: pc })));
+    setEditingOrder(true);
+  }
+
+  function handleCancelEditOrder() {
+    setEditingOrder(false);
+    setEditStops([]);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setEditStops((prev) => {
+      const oldIdx = prev.findIndex((s) => s.id === active.id);
+      const newIdx = prev.findIndex((s) => s.id === over.id);
+      return arrayMove(prev, oldIdx, newIdx);
+    });
+  }
+
+  async function handleSaveOrder() {
+    if (!run || !isAdmin) return;
+    const newRawText = editStops.map((s) => s.postcode).join("\n");
+    const resetProgress: ProgressState = { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false };
+    await updateRunAction(run.id, { rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
+    setRun({ ...run, rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
+    setProgress(resetProgress);
+    progressRef.current = resetProgress;
+    setEtaText("—");
+    setEtaDetails(null);
+    setEditingOrder(false);
+    setEditStops([]);
+  }
+
   if (runLoading) {
     return (
       <div className="min-h-screen bg-black text-white">
@@ -820,6 +965,21 @@ export default function RunDetailPage() {
               className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
             />
 
+            <div className="mt-4 flex gap-2 flex-wrap">
+              <button
+                onClick={handleReRoute}
+                disabled={reRouting || stops.length === 0}
+                className="px-4 py-2 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {reRouting ? "Re-routing..." : "Re-route (optimize order)"}
+              </button>
+              <button
+                onClick={handleDeleteRun}
+                className="px-4 py-2 rounded-lg border border-red-400/30 text-red-400 hover:bg-red-400/10 text-sm font-medium transition-colors"
+              >
+                Delete run
+              </button>
+            </div>
           </div>
         ) : (
           <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
@@ -834,18 +994,59 @@ export default function RunDetailPage() {
         <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="text-lg font-semibold">
-              Stops <span className="text-sm text-gray-400">(live status)</span>
+              Stops <span className="text-sm text-gray-400">{editingOrder ? "(editing order)" : "(live status)"}</span>
             </div>
 
-            <div className="text-sm text-gray-400">
-              Next stop:{" "}
-              <span className="text-gray-200 font-semibold">
-                {nextIdx == null ? "—" : `${nextIdx + 1}. ${stops[nextIdx]}`}
-              </span>
+            <div className="flex items-center gap-3">
+              {isAdmin && !editingOrder && (
+                <button
+                  onClick={handleStartEditOrder}
+                  className="px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
+                >
+                  Edit order
+                </button>
+              )}
+              {!editingOrder && (
+                <div className="text-sm text-gray-400">
+                  Next stop:{" "}
+                  <span className="text-gray-200 font-semibold">
+                    {nextIdx == null ? "—" : `${nextIdx + 1}. ${stops[nextIdx]}`}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
-          {stops.length === 0 ? (
+          {editingOrder ? (
+            <>
+              <div className="text-xs text-yellow-400 mt-2 mb-3">
+                Drag stops to reorder. Saving will reset delivery progress.
+              </div>
+              <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={editStops.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-2">
+                    {editStops.map((s, idx) => (
+                      <SortableStopRow key={s.id} id={s.id} postcode={s.postcode} index={idx} />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={handleSaveOrder}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
+                >
+                  Save order
+                </button>
+                <button
+                  onClick={handleCancelEditOrder}
+                  className="px-4 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : stops.length === 0 ? (
             <div className="text-gray-400 mt-4">No postcodes parsed from this run.</div>
           ) : (
             <div className="space-y-2 mt-4">

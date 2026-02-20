@@ -28,6 +28,7 @@ export async function updateRun(
   fields: Partial<{
     vehicle: string;
     loadRef: string;
+    rawText: string;
     progress: ProgressState;
     completedStopIndexes: number[];
     completedMeta: Record<number, { atISO: string; by: "auto" | "admin" }>;
@@ -39,6 +40,7 @@ export async function updateRun(
   const row: Record<string, any> = {};
   if (fields.vehicle !== undefined) row.vehicle = fields.vehicle;
   if (fields.loadRef !== undefined) row.load_ref = fields.loadRef;
+  if (fields.rawText !== undefined) row.raw_text = fields.rawText;
   if (fields.progress !== undefined) row.progress = fields.progress;
   if (fields.completedStopIndexes !== undefined) row.completed_stop_indexes = fields.completedStopIndexes;
   if (fields.completedMeta !== undefined) row.completed_meta = fields.completedMeta;

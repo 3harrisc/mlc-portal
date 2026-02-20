@@ -199,11 +199,12 @@ export default function ReportsPage() {
               const pct = totalStops > 0 ? Math.round((completedCount / totalStops) * 100) : 0;
               const isExpanded = expandedId === run.id;
 
-              // Get first/last delivery times from completed_meta
+              // Get first arrival / last departure from completed_meta
               const meta = run.completedMeta ?? {};
-              const metaTimes = Object.values(meta).map((m) => new Date(m.atISO).getTime()).filter((t) => !isNaN(t));
-              const firstDelivery = metaTimes.length ? new Date(Math.min(...metaTimes)).toISOString() : null;
-              const lastDelivery = metaTimes.length ? new Date(Math.max(...metaTimes)).toISOString() : null;
+              const arrivalTimes = Object.values(meta).map((m) => m.arrivedISO ? new Date(m.arrivedISO).getTime() : new Date(m.atISO).getTime()).filter((t) => !isNaN(t));
+              const departureTimes = Object.values(meta).map((m) => new Date(m.atISO).getTime()).filter((t) => !isNaN(t));
+              const firstDelivery = arrivalTimes.length ? new Date(Math.min(...arrivalTimes)).toISOString() : null;
+              const lastDelivery = departureTimes.length ? new Date(Math.max(...departureTimes)).toISOString() : null;
 
               const isComplete = totalStops > 0 && completedCount >= totalStops;
 
@@ -293,7 +294,10 @@ export default function ReportsPage() {
                               <div className="text-right">
                                 {stopMeta ? (
                                   <div className="text-xs">
-                                    <span className="text-gray-300">{formatTime(stopMeta.atISO)}</span>
+                                    {stopMeta.arrivedISO && (
+                                      <span className="text-gray-400">Arr {formatTime(stopMeta.arrivedISO)} — </span>
+                                    )}
+                                    <span className="text-gray-300">Left {formatTime(stopMeta.atISO)}</span>
                                     <span className="text-gray-600 ml-1.5">
                                       ({stopMeta.by === "auto" ? "auto" : "manual"})
                                     </span>

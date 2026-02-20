@@ -500,6 +500,16 @@ export default function RunDetailPage() {
               p.onSiteSinceMs = null;
             }
 
+            // Clear stale on-site state when stop was completed while inside
+            // but nextStopIndex has since advanced past it
+            if (
+              p.onSiteIdx != null &&
+              p.completedIdx.includes(p.onSiteIdx)
+            ) {
+              p.onSiteIdx = null;
+              p.onSiteSinceMs = null;
+            }
+
             p.lastInside = false;
           }
         }
@@ -875,6 +885,17 @@ export default function RunDetailPage() {
                         {status === "on_site" && progress?.onSiteSinceMs && (
                           <div className="text-xs text-gray-500">
                             Stopped for {minutesBetween(progress.onSiteSinceMs, Date.now())} mins (will complete on leaving)
+                          </div>
+                        )}
+                        {status === "completed" && run?.completedMeta?.[idx] && (
+                          <div className="text-xs text-gray-500">
+                            {run.completedMeta[idx].arrivedISO && (
+                              <span>Arrived {new Date(run.completedMeta[idx].arrivedISO!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                            )}
+                            {run.completedMeta[idx].arrivedISO && run.completedMeta[idx].atISO && " — "}
+                            {run.completedMeta[idx].atISO && (
+                              <span>Left {new Date(run.completedMeta[idx].atISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                            )}
                           </div>
                         )}
                       </div>

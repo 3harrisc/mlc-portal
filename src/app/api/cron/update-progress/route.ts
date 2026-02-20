@@ -291,6 +291,17 @@ export async function GET(req: Request) {
           p.onSiteIdx = null;
           p.onSiteSinceMs = null;
         }
+
+        // Clear stale on-site state when stop was completed while inside
+        // but nextStopIndex has since advanced past it
+        if (
+          p.onSiteIdx != null &&
+          p.completedIdx.includes(p.onSiteIdx)
+        ) {
+          p.onSiteIdx = null;
+          p.onSiteSinceMs = null;
+        }
+
         p.lastInside = false;
       }
 
@@ -302,7 +313,7 @@ export async function GET(req: Request) {
         run.completed_stop_indexes ?? [];
       const existingMeta: Record<
         number,
-        { atISO: string; by: "auto" | "admin" }
+        { atISO: string; by: "auto" | "admin"; arrivedISO?: string }
       > = run.completed_meta ?? {};
 
       const newlyCompleted = p.completedIdx.filter(
@@ -319,6 +330,9 @@ export async function GET(req: Request) {
           mergedMeta[idx] = {
             atISO: new Date().toISOString(),
             by: "auto",
+            arrivedISO: p.onSiteSinceMs
+              ? new Date(p.onSiteSinceMs).toISOString()
+              : undefined,
           };
         }
 

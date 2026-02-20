@@ -15,7 +15,7 @@ export type PlannedRun = {
   includeBreaks: boolean;
   rawText: string; // pasted lines
   completedStopIndexes?: number[];
-  completedMeta?: Record<number, { atISO: string; by: "auto" | "admin" }>;
+  completedMeta?: Record<number, { atISO: string; by: "auto" | "admin"; arrivedISO?: string }>;
   progress?: ProgressState;
   createdBy?: string;
 };

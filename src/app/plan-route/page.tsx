@@ -358,6 +358,10 @@ export default function PlanRoutePage() {
   const [repeatMonFri, setRepeatMonFri] = useState<boolean>(false);
   const [repeatWeeks, setRepeatWeeks] = useState<number>(1);
   const [repeatStartDate, setRepeatStartDate] = useState<string>(date);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string>("");
+  const [showAllRuns, setShowAllRuns] = useState(false);
+  const [runSearch, setRunSearch] = useState("");
 
   // Map state
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
@@ -710,6 +714,9 @@ export default function PlanRoutePage() {
       return;
     }
 
+    setSaveMessage("");
+    setSaving(true);
+
     let dates: string[] = [];
     if (!repeatMonFri) {
       dates = [date];
@@ -753,6 +760,7 @@ export default function PlanRoutePage() {
     }
 
     const result = await createRunsAction(newRuns);
+    setSaving(false);
     if (result.error) {
       setRouteError(result.error);
       return;
@@ -760,6 +768,12 @@ export default function PlanRoutePage() {
 
     const next = [...newRuns, ...plannedRuns].sort((a, b) => (a.date < b.date ? -1 : 1));
     setPlannedRuns(next);
+
+    const msg = newRuns.length === 1
+      ? `Run ${newRuns[0].jobNumber} saved!`
+      : `${newRuns.length} runs saved!`;
+    setSaveMessage(msg);
+    setTimeout(() => setSaveMessage(""), 5000);
   }
 
   async function deleteRun(id: string) {
@@ -1104,9 +1118,14 @@ export default function PlanRoutePage() {
               </div>
             </div>
             <div className="text-xs text-gray-400 mt-3">Creates runs for weekdays only (Mon–Fri). Weekend days are skipped automatically.</div>
-            <button onClick={createRuns} className="mt-4 w-full px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">
-              Create run{repeatMonFri ? "s" : ""} (save)
+            <button onClick={createRuns} disabled={saving} className="mt-4 w-full px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-colors">
+              {saving ? "Saving..." : `Create run${repeatMonFri ? "s" : ""} (save)`}
             </button>
+            {saveMessage && (
+              <div className="mt-3 text-sm text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 rounded-lg px-3 py-2 font-medium">
+                {saveMessage}
+              </div>
+            )}
             <div className="text-xs text-gray-500 mt-3">Job numbers are created automatically when runs are saved.</div>
           </div>
 
@@ -1207,25 +1226,74 @@ export default function PlanRoutePage() {
 
         {/* Planned runs list */}
         <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
-          <h3 className="text-xl font-semibold mb-3">Planned runs</h3>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <h3 className="text-xl font-semibold">
+              Saved runs {plannedRuns.length > 0 && <span className="text-sm text-gray-400 font-normal">({plannedRuns.length})</span>}
+            </h3>
+            {plannedRuns.length > 0 && (
+              <input
+                type="text"
+                value={runSearch}
+                onChange={(e) => { setRunSearch(e.target.value); setShowAllRuns(true); }}
+                placeholder="Search by job, date, customer..."
+                className="w-full sm:w-64 px-3 py-1.5 border border-white/15 rounded-lg bg-transparent text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            )}
+          </div>
           {plannedRuns.length === 0 ? (
-            <div className="text-gray-400">None saved yet. Use "Create run(s)" above.</div>
-          ) : (
-            <div className="space-y-2">
-              {plannedRuns.map((r) => (
-                <div key={r.id} className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-4">
-                  <div>
-                    <div className="font-semibold">{r.jobNumber} • {r.date} • {r.customer} {r.vehicle ? `• ${r.vehicle}` : ""} • Breaks: {r.includeBreaks ? "On" : "Off"}</div>
-                    <div className="text-xs text-gray-400">From {r.fromPostcode} • {r.returnToBase ? "Return to base" : (r.toPostcode ? `To ${r.toPostcode}` : "End at last drop")} • Start {r.startTime} • Service {r.serviceMins}m</div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => duplicateRun(r)} className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10">Load</button>
-                    <button onClick={() => deleteRun(r.id)} className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10">Delete</button>
-                  </div>
+            <div className="text-gray-400">None saved yet. Use &quot;Create run(s)&quot; above.</div>
+          ) : (() => {
+            const q = runSearch.toLowerCase().trim();
+            const filtered = q
+              ? plannedRuns.filter((r) =>
+                  (r.jobNumber || "").toLowerCase().includes(q) ||
+                  r.date.includes(q) ||
+                  r.customer.toLowerCase().includes(q) ||
+                  (r.vehicle || "").toLowerCase().includes(q) ||
+                  r.fromPostcode.toLowerCase().includes(q)
+                )
+              : plannedRuns;
+            const PREVIEW_COUNT = 5;
+            const visible = showAllRuns ? filtered : filtered.slice(0, PREVIEW_COUNT);
+            const hasMore = !showAllRuns && filtered.length > PREVIEW_COUNT;
+            return (
+              <>
+                <div className="space-y-2">
+                  {visible.map((r) => (
+                    <div key={r.id} className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-semibold truncate">{r.jobNumber} • {r.date} • {r.customer} {r.vehicle ? `• ${r.vehicle}` : ""}</div>
+                        <div className="text-xs text-gray-400 truncate">From {r.fromPostcode} • {r.returnToBase ? "Return to base" : (r.toPostcode ? `To ${r.toPostcode}` : "End at last drop")} • Start {r.startTime}</div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button onClick={() => duplicateRun(r)} className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm">Load</button>
+                        <button onClick={() => deleteRun(r.id)} className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm">Delete</button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+                {q && filtered.length === 0 && (
+                  <div className="text-gray-500 text-sm mt-3">No runs match &quot;{runSearch}&quot;</div>
+                )}
+                {hasMore && (
+                  <button
+                    onClick={() => setShowAllRuns(true)}
+                    className="mt-3 w-full py-2 rounded-lg border border-white/10 hover:bg-white/5 text-sm text-gray-400 transition-colors"
+                  >
+                    Show all {filtered.length} saved runs
+                  </button>
+                )}
+                {showAllRuns && filtered.length > PREVIEW_COUNT && !q && (
+                  <button
+                    onClick={() => setShowAllRuns(false)}
+                    className="mt-3 w-full py-2 rounded-lg border border-white/10 hover:bg-white/5 text-sm text-gray-400 transition-colors"
+                  >
+                    Show less
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </div>
       </div>
     </div>

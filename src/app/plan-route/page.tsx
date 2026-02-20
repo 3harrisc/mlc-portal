@@ -24,6 +24,11 @@ import { createRuns as createRunsAction, nextJobNumber } from "@/app/actions/run
 import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplateAction } from "@/app/actions/templates";
 import type { PlannedRun, CustomerKey, RouteTemplate } from "@/types/runs";
 import { rowToRun, rowToTemplate } from "@/types/runs";
+import { HGV_TIME_MULTIPLIER, MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS, DEFAULT_SERVICE_MINS, DEFAULT_START_TIME } from "@/lib/constants";
+import { CUSTOMERS, CUSTOMER_BASE_POSTCODES, DEFAULT_BASE, getDefaultOpeningForCustomer } from "@/lib/customers";
+import { normalizePostcode } from "@/lib/postcode-utils";
+import { haversineKm, type LngLat } from "@/lib/geo-utils";
+import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
 
 type Stop = {
   id: string;
@@ -34,8 +39,6 @@ type Stop = {
   close?: string; // "HH:MM"
 };
 
-type LngLat = { lng: number; lat: number };
-
 type ScheduleRow =
   | { kind: "drive"; label: string; minutes: number; at: string }
   | { kind: "break"; label: string; minutes: number; at: string }
@@ -43,40 +46,8 @@ type ScheduleRow =
 
 type LegRow = { label: string; mins: number; km: number };
 
-const CUSTOMER_OPENING_PRESETS: Record<CustomerKey, { open: string; close: string }> = {
-  Montpellier: { open: "08:00", close: "17:00" },
-  "Customer A": { open: "08:00", close: "17:00" },
-  "Customer B": { open: "08:00", close: "17:00" },
-  Consolid8: { open: "06:00", close: "18:00" },
-  Ashwood: { open: "08:00", close: "17:00" },
-};
-
-function getDefaultOpeningForCustomer(customer: CustomerKey) {
-  return CUSTOMER_OPENING_PRESETS[customer] ?? { open: "08:00", close: "17:00" };
-}
-
-const CUSTOMER_BASE: Partial<Record<CustomerKey, string>> = {
-  Montpellier: "GL2 7ND",
-  Ashwood: "CF44 8ER",
-};
-
-const DEFAULT_START_TIME = "08:00";
-const DEFAULT_SERVICE_MINS = 25;
-const DEFAULT_BASE = "GL2 7ND"; // Montpellier base
-
-// Simple "HGV reality" factor (Mapbox car routing → adjust up a bit)
-const HGV_TIME_MULTIPLIER = 1.15;
-
-// Break rule: 45 mins after 4h30 DRIVING (driving time only)
-const MAX_DRIVE_BEFORE_BREAK_MINS = 270;
-const BREAK_MINS = 45;
-
 function uid() {
   return Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
-}
-
-function normPostcode(s: string) {
-  return s.trim().toUpperCase().replace(/\s+/g, " ");
 }
 
 function extractPostcodeAndTime(line: string): { postcode: string | null; time?: string } {
@@ -85,7 +56,7 @@ function extractPostcodeAndTime(line: string): { postcode: string | null; time?:
 
   const m = cleaned.match(/([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\s*(\d{1,2}:\d{2})?\s*$/i);
   if (!m) return { postcode: null };
-  const pc = normPostcode(m[1]);
+  const pc = normalizePostcode(m[1]);
   const time = m[2];
   if (time) {
     const [hh, mm] = time.split(":").map((x) => Number(x));
@@ -94,36 +65,6 @@ function extractPostcodeAndTime(line: string): { postcode: string | null; time?:
     }
   }
   return { postcode: pc };
-}
-
-function timeToMinutes(hhmm?: string) {
-  if (!hhmm) return null;
-  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
-  if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-  return hh * 60 + mm;
-}
-
-function minutesToTime(minsFromMidnight: number) {
-  const hh = Math.floor(minsFromMidnight / 60) % 24;
-  const mm = minsFromMidnight % 60;
-  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-}
-
-function haversineKm(a: LngLat, b: LngLat) {
-  const R = 6371;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const la1 = (a.lat * Math.PI) / 180;
-  const la2 = (b.lat * Math.PI) / 180;
-
-  const x =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(la1) * Math.cos(la2);
-  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-  return R * c;
 }
 
 function addDays(yyyyMmDd: string, days: number) {
@@ -477,7 +418,7 @@ export default function PlanRoutePage() {
   async function ensureCoords(postcodes: string[]) {
     if (!mapboxToken) throw new Error("Missing Mapbox token (NEXT_PUBLIC_MAPBOX_TOKEN).");
 
-    const unique = Array.from(new Set(postcodes.map(normPostcode)));
+    const unique = Array.from(new Set(postcodes.map(normalizePostcode)));
     const updates: Record<string, LngLat> = { ...coordsByPostcode };
 
     for (const pc of unique) {
@@ -507,12 +448,12 @@ export default function PlanRoutePage() {
       return;
     }
 
-    const from = normPostcode(fromPostcode);
+    const from = normalizePostcode(fromPostcode);
 
     const to =
       returnToBase
-        ? normPostcode(fromPostcode)
-        : (normPostcode(toPostcode || "") || "");
+        ? normalizePostcode(fromPostcode)
+        : (normalizePostcode(toPostcode || "") || "");
 
     const pcs = [from, ...stops.map((s) => s.postcode), ...(to ? [to] : [])];
 
@@ -669,8 +610,8 @@ export default function PlanRoutePage() {
       id: uid(),
       name,
       customer,
-      fromPostcode: normPostcode(fromPostcode),
-      toPostcode: normPostcode(toPostcode),
+      fromPostcode: normalizePostcode(fromPostcode),
+      toPostcode: normalizePostcode(toPostcode),
       returnToBase,
       serviceMins,
       startTime,
@@ -729,12 +670,12 @@ export default function PlanRoutePage() {
       }
     }
 
-    const from = normPostcode(fromPostcode);
+    const from = normalizePostcode(fromPostcode);
 
     const to =
       returnToBase
         ? from
-        : (normPostcode(toPostcode || "") || "");
+        : (normalizePostcode(toPostcode || "") || "");
 
     // Get job numbers from server (atomic)
     const newRuns: PlannedRun[] = [];
@@ -834,8 +775,8 @@ export default function PlanRoutePage() {
   // Pre-geocode so map can show pins
   useEffect(() => {
     const pcs = [
-      normPostcode(fromPostcode),
-      ...(returnToBase ? [normPostcode(fromPostcode)] : (normPostcode(toPostcode || "") ? [normPostcode(toPostcode || "")] : [])),
+      normalizePostcode(fromPostcode),
+      ...(returnToBase ? [normalizePostcode(fromPostcode)] : (normalizePostcode(toPostcode || "") ? [normalizePostcode(toPostcode || "")] : [])),
       ...stops.map((s) => s.postcode),
     ].filter(Boolean);
 
@@ -866,8 +807,8 @@ export default function PlanRoutePage() {
 
     const points: LngLat[] = [];
 
-    const from = normPostcode(fromPostcode);
-    const to = returnToBase ? from : normPostcode(toPostcode || "");
+    const from = normalizePostcode(fromPostcode);
+    const to = returnToBase ? from : normalizePostcode(toPostcode || "");
 
     const fromLL = coordsByPostcode[from];
 
@@ -973,7 +914,7 @@ export default function PlanRoutePage() {
     }
   }, [mapMode]);
 
-  const customerOptions: CustomerKey[] = ["Montpellier", "Customer A", "Customer B", "Consolid8", "Ashwood"];
+  const customerOptions = CUSTOMERS;
   const opening = getDefaultOpeningForCustomer(customer);
 
   return (
@@ -990,7 +931,7 @@ export default function PlanRoutePage() {
 
           <div>
             <label className="block text-sm font-semibold mb-2">Customer</label>
-            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const base = CUSTOMER_BASE[c]; if (base) setFromPostcode(base); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
+            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const base = CUSTOMER_BASE_POSTCODES[c]; if (base) setFromPostcode(base); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
               {customerOptions.map((c) => (<option key={c} value={c} className="bg-black">{c}</option>))}
             </select>
             <div className="text-xs text-gray-400 mt-2">Customer controls who can view later. Routing uses From/To.</div>
@@ -1017,18 +958,18 @@ export default function PlanRoutePage() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
           <div>
             <label className="block text-sm font-semibold mb-2">From (routing only)</label>
-            <input value={fromPostcode} onChange={(e) => setFromPostcode(normPostcode(e.target.value))} placeholder="e.g. GL2 7ND" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+            <input value={fromPostcode} onChange={(e) => setFromPostcode(normalizePostcode(e.target.value))} placeholder="e.g. GL2 7ND" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
             <div className="text-xs text-gray-400 mt-2">Default base is GL2 7ND (Montpellier).</div>
           </div>
 
           <div>
             <label className="block text-sm font-semibold mb-2">To (routing only)</label>
-            <input value={toPostcode} onChange={(e) => setToPostcode(normPostcode(e.target.value))} disabled={returnToBase} placeholder="Leave blank to finish at last drop" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent disabled:opacity-50" />
+            <input value={toPostcode} onChange={(e) => setToPostcode(normalizePostcode(e.target.value))} disabled={returnToBase} placeholder="Leave blank to finish at last drop" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent disabled:opacity-50" />
             <div className="mt-2 flex items-center gap-2 text-sm">
               <input type="checkbox" checked={returnToBase} onChange={(e) => setReturnToBase(e.target.checked)} />
               <span>Return to base</span>
             </div>
-            {!returnToBase && !normPostcode(toPostcode || "") && (
+            {!returnToBase && !normalizePostcode(toPostcode || "") && (
               <div className="text-xs text-emerald-300 mt-2">End = last drop (no return leg)</div>
             )}
           </div>
@@ -1060,8 +1001,8 @@ export default function PlanRoutePage() {
           <button onClick={routeRespectBookings} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">Route (respect booking times)</button>
           <button onClick={() => { setStops([]); setScheduleRows([]); setLegRows([]); setRouteError(""); setRawText(""); }} className="px-5 py-2 rounded-lg border border-white/15 hover:bg-white/10">Clear stops</button>
           <div className="text-xs text-gray-400 flex items-center">
-            From: <span className="mx-2 text-white/80">{normPostcode(fromPostcode)}</span> • To:{" "}
-            <span className="mx-2 text-white/80">{returnToBase ? normPostcode(fromPostcode) : (normPostcode(toPostcode || "") || "(last drop)")}</span>{" "}
+            From: <span className="mx-2 text-white/80">{normalizePostcode(fromPostcode)}</span> • To:{" "}
+            <span className="mx-2 text-white/80">{returnToBase ? normalizePostcode(fromPostcode) : (normalizePostcode(toPostcode || "") || "(last drop)")}</span>{" "}
             • Customer: <span className="mx-2 text-white/80">{customer}</span> • Date: <span className="mx-2 text-white/80">{date}</span>
           </div>
         </div>

@@ -5,7 +5,9 @@
 // NOTE: “Next day” rule here is only for DISPLAY (after 17:00 shows "Next day").
 // You can tighten this later to actually roll into the next day with working windows.
 
-export type LngLat = { lng: number; lat: number };
+import { normalizePostcode } from "@/lib/postcode-utils";
+import type { LngLat } from "@/lib/geo-utils";
+export type { LngLat };
 
 export type EtaLeg = {
   fromLabel: string;
@@ -57,16 +59,7 @@ export type EtaChainOptions = {
   nextDayStartHHMM?: string; // default "08:00"
 };
 
-export function normalizePostcode(input: string) {
-  const s = (input || "").trim().toUpperCase();
-  const noSpace = s.replace(/\s+/g, "");
-  if (noSpace.length >= 5) {
-    const head = noSpace.slice(0, -3);
-    const tail = noSpace.slice(-3);
-    return `${head} ${tail}`.trim();
-  }
-  return s;
-}
+
 
 function timeToMins(hhmm: string) {
   const m = hhmm.match(/^(\d{2}):(\d{2})$/);

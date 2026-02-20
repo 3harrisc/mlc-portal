@@ -2,11 +2,9 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
-
-// ── Constants (must match client-side page.tsx) ──────────────────────
-const COMPLETION_RADIUS_METERS = 800;
-const MIN_STANDSTILL_MINS = 3;
-const STANDSTILL_SPEED_KPH = 3;
+import { COMPLETION_RADIUS_METERS, MIN_STANDSTILL_MINS, STANDSTILL_SPEED_KPH } from "@/lib/constants";
+import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
+import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
 
 const DEFAULT_PROGRESS: ProgressState = {
   completedIdx: [],
@@ -14,66 +12,6 @@ const DEFAULT_PROGRESS: ProgressState = {
   onSiteSinceMs: null,
   lastInside: false,
 };
-
-// ── Helpers (duplicated from page.tsx — pure functions) ──────────────
-
-type LngLat = { lng: number; lat: number };
-
-function normalizePostcode(input: string) {
-  const s = (input || "").trim().toUpperCase();
-  const noSpace = s.replace(/\s+/g, "");
-  if (noSpace.length >= 5) {
-    const head = noSpace.slice(0, -3);
-    const tail = noSpace.slice(-3);
-    return `${head} ${tail}`.trim();
-  }
-  return s;
-}
-
-function extractPostcode(line: string): string | null {
-  const m = line
-    .toUpperCase()
-    .match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?)\s*(\d[A-Z]{2})\b/);
-  if (!m) return null;
-  return normalizePostcode(`${m[1]} ${m[2]}`);
-}
-
-function parseStops(rawText: string): string[] {
-  const lines = (rawText || "")
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const out: string[] = [];
-  for (const line of lines) {
-    const pc = extractPostcode(line);
-    if (pc) out.push(pc);
-  }
-  return out;
-}
-
-function haversineMeters(a: LngLat, b: LngLat) {
-  const R = 6371000;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const la1 = (a.lat * Math.PI) / 180;
-  const la2 = (b.lat * Math.PI) / 180;
-  const x =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(la1) * Math.cos(la2);
-  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-  return R * c;
-}
-
-function minutesBetween(aMs: number, bMs: number) {
-  return Math.max(0, Math.round((bMs - aMs) / 60000));
-}
-
-function nextStopIndex(stops: string[], completedIdx: number[]) {
-  for (let i = 0; i < stops.length; i++) {
-    if (!completedIdx.includes(i)) return i;
-  }
-  return null;
-}
 
 // ── Geocoding with Supabase cache ────────────────────────────────────
 

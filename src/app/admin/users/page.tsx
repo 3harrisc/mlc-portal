@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { inviteUser, createUserWithPassword, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
+import { CUSTOMERS } from "@/lib/customers";
 
-const ALL_CUSTOMERS = ["Montpellier", "Customer A", "Customer B", "Consolid8", "Ashwood"];
+const ALL_CUSTOMERS = CUSTOMERS;
 
 type UserRow = {
   id: string;

@@ -8,14 +8,8 @@ import { createClient } from "@/lib/supabase/client";
 import { deleteRun as deleteRunAction } from "@/app/actions/runs";
 import type { PlannedRun, CustomerKey } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
-
-function todayISO() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
+import { todayISO } from "@/lib/time-utils";
+import { CUSTOMERS } from "@/lib/customers";
 
 function norm(s: string) {
   return (s || "").trim().toUpperCase().replace(/\s+/g, " ");
@@ -127,11 +121,9 @@ export default function RunsPage() {
               className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
             >
               <option value="All" className="bg-black">All</option>
-              <option value="Montpellier" className="bg-black">Montpellier</option>
-              <option value="Customer A" className="bg-black">Customer A</option>
-              <option value="Customer B" className="bg-black">Customer B</option>
-              <option value="Consolid8" className="bg-black">Consolid8</option>
-              <option value="Ashwood" className="bg-black">Ashwood</option>
+              {CUSTOMERS.map((c) => (
+                <option key={c} value={c} className="bg-black">{c}</option>
+              ))}
             </select>
           </div>
 

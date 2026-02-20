@@ -6,40 +6,8 @@ import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import { rowToRun } from "@/types/runs";
 import type { PlannedRun } from "@/types/runs";
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function extractPostcode(line: string): string | null {
-  const m = line.toUpperCase().match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?)\s*(\d[A-Z]{2})\b/);
-  if (!m) return null;
-  const noSpace = `${m[1]}${m[2]}`;
-  if (noSpace.length >= 5) {
-    return `${noSpace.slice(0, -3)} ${noSpace.slice(-3)}`;
-  }
-  return noSpace;
-}
-
-function parseStops(rawText: string): string[] {
-  return (rawText || "")
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map(extractPostcode)
-    .filter((pc): pc is string => pc !== null);
-}
-
-function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "—";
-  }
-}
+import { parseStops } from "@/lib/postcode-utils";
+import { todayISO, formatTime } from "@/lib/time-utils";
 
 // ── Component ────────────────────────────────────────────────────────
 

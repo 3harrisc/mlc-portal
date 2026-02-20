@@ -11,6 +11,18 @@ import { updateRun as updateRunAction, deleteRun as deleteRunAction } from "@/ap
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
 import {
+  COMPLETION_RADIUS_METERS,
+  MIN_STANDSTILL_MINS,
+  STANDSTILL_SPEED_KPH,
+  HGV_TIME_MULTIPLIER,
+  MAX_SPEED_KPH,
+  MAX_DRIVE_BEFORE_BREAK_MINS,
+  BREAK_MINS,
+  AFTER_HOURS_CUTOFF_MINS,
+} from "@/lib/constants";
+import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
+import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
+import {
   DndContext,
   PointerSensor,
   closestCenter,
@@ -26,8 +38,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-type LngLat = { lng: number; lat: number };
-
 type VehicleSnapshot = {
   vehicle: string;
   lat: number;
@@ -39,84 +49,12 @@ type VehicleSnapshot = {
 
 type StopStatus = "completed" | "on_site" | "pending";
 
-// completion rules
-const COMPLETION_RADIUS_METERS = 800;
-const MIN_STANDSTILL_MINS = 3;
-const STANDSTILL_SPEED_KPH = 3;
-
-// ETA realism
-const HGV_TIME_MULTIPLIER = 1.15;
-const MAX_SPEED_KPH = 88.5; // 55 mph
-const MAX_DRIVE_BEFORE_BREAK_MINS = 270; // 4h30
-const BREAK_MINS = 45;
-
-// UI rule: show "Next day" if ETA local time >= 17:00 OR date rolls over
-const AFTER_HOURS_CUTOFF_MINS = 17 * 60;
-
 const DEFAULT_PROGRESS: ProgressState = {
   completedIdx: [],
   onSiteIdx: null,
   onSiteSinceMs: null,
   lastInside: false,
 };
-
-function normalizePostcode(input: string) {
-  const s = (input || "").trim().toUpperCase();
-  const noSpace = s.replace(/\s+/g, "");
-  if (noSpace.length >= 5) {
-    const head = noSpace.slice(0, -3);
-    const tail = noSpace.slice(-3);
-    return `${head} ${tail}`.trim();
-  }
-  return s;
-}
-
-function extractPostcode(line: string): string | null {
-  const m = line
-    .toUpperCase()
-    .match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?)\s*(\d[A-Z]{2})\b/);
-  if (!m) return null;
-  return normalizePostcode(`${m[1]} ${m[2]}`);
-}
-
-function parseStops(rawText: string): string[] {
-  const lines = (rawText || "")
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  const out: string[] = [];
-  for (const line of lines) {
-    const pc = extractPostcode(line);
-    if (pc) out.push(pc);
-  }
-  return out;
-}
-
-function haversineMeters(a: LngLat, b: LngLat) {
-  const R = 6371000;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const la1 = (a.lat * Math.PI) / 180;
-  const la2 = (b.lat * Math.PI) / 180;
-
-  const x =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(la1) * Math.cos(la2);
-  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-  return R * c;
-}
-
-function minutesBetween(aMs: number, bMs: number) {
-  return Math.max(0, Math.round((bMs - aMs) / 60000));
-}
-
-function nextStopIndex(stops: string[], completedIdx: number[]) {
-  for (let i = 0; i < stops.length; i++) {
-    if (!completedIdx.includes(i)) return i;
-  }
-  return null;
-}
 
 async function geocodePostcode(postcode: string, mapboxToken: string): Promise<LngLat> {
   const pc = normalizePostcode(postcode);

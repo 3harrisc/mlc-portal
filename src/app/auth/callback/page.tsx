@@ -5,20 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-/**
- * /auth/callback
- *
- * Handles Supabase auth flows from email links (invite, recovery):
- *  - PKCE flow: ?code=... in query params
- *  - Implicit flow: #access_token=...&type=invite in hash
- *
- * The Supabase browser client (singleton from AuthProvider) may auto-process
- * these tokens before this page mounts. We handle that race condition by:
- *  1. Reading hash from sessionStorage (captured by inline script in layout)
- *  2. Checking for an existing session first (from auto-processing)
- *  3. Falling back to manual code/hash processing
- *  4. Using onAuthStateChange as a final backup
- */
 export default function AuthCallbackPage() {
   return (
     <Suspense>
@@ -37,9 +23,7 @@ function CallbackHandler() {
     async function handleCallback() {
       const supabase = createClient();
 
-      // ── Capture the auth "type" from all available sources ──
-      // The inline script in layout.tsx saves hash params to sessionStorage
-      // before the Supabase client can clear them.
+      // ── Determine auth type from hash + query params ──
       const savedHash = sessionStorage.getItem("__supabase_auth_hash");
       if (savedHash) sessionStorage.removeItem("__supabase_auth_hash");
 
@@ -53,25 +37,21 @@ function CallbackHandler() {
       const accessToken = hashParams?.get("access_token");
       const refreshToken = hashParams?.get("refresh_token");
 
-      // ── 1. Session may already exist (Supabase auto-processed) ──
-      const { data: { session: existing } } = await supabase.auth.getSession();
-      if (existing) {
-        if (!cancelled) redirect(type);
-        return;
-      }
-
-      // ── 2. PKCE code exchange ──
+      // ── 1. PKCE code exchange ──
       if (code) {
-        const { error: codeErr } = await supabase.auth.exchangeCodeForSession(code);
+        const { error: codeErr } =
+          await supabase.auth.exchangeCodeForSession(code);
         if (!codeErr) {
           if (!cancelled) redirect(type);
           return;
         }
-        // Code might have been consumed by auto-processing that hasn't
-        // synced to getSession yet — fall through to wait below.
+        // Code exchange failed — show error
+        if (!cancelled)
+          setError("Invalid or expired link. Please request a new invite.");
+        return;
       }
 
-      // ── 3. Implicit flow (hash fragment tokens) ──
+      // ── 2. Implicit flow (hash fragment tokens) ──
       if (accessToken && refreshToken) {
         const { error: sessErr } = await supabase.auth.setSession({
           access_token: accessToken,
@@ -81,46 +61,24 @@ function CallbackHandler() {
           if (!cancelled) redirect(type);
           return;
         }
-      }
-
-      // ── 4. Wait for Supabase auto-processing to finish ──
-      // The singleton client's _initialize() may still be exchanging the
-      // code in the background. Listen for auth state changes.
-      const gotSession = await new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => {
-          sub.unsubscribe();
-          resolve(false);
-        }, 5000);
-
-        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
-          (_event, session) => {
-            if (session) {
-              clearTimeout(timeout);
-              sub.unsubscribe();
-              resolve(true);
-            }
-          }
-        );
-
-        // Also poll once more after a short delay
-        setTimeout(async () => {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            clearTimeout(timeout);
-            sub.unsubscribe();
-            resolve(true);
-          }
-        }, 1000);
-      });
-
-      if (gotSession) {
-        if (!cancelled) redirect(type);
+        if (!cancelled)
+          setError("Invalid or expired link. Please request a new invite.");
         return;
       }
 
-      // ── 5. Nothing worked ──
+      // ── 3. Hash with access_token but no refresh_token ──
+      if (accessToken) {
+        // Some Supabase flows only include access_token
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          if (!cancelled) redirect(type);
+          return;
+        }
+      }
+
+      // ── 4. Nothing to process ──
       if (!cancelled) {
-        setError("Invalid or expired link. Please request a new one.");
+        setError("Invalid or expired link. Please request a new invite.");
       }
     }
 

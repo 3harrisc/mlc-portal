@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { inviteUser, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
+import { inviteUser, createUserWithPassword, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
 
 const ALL_CUSTOMERS = ["Montpellier", "Customer A", "Customer B", "Consolid8", "Ashwood"];
 
@@ -29,7 +29,9 @@ export default function AdminUsersPage() {
 
   // New user form
   const [showForm, setShowForm] = useState(false);
+  const [createMode, setCreateMode] = useState<"invite" | "manual">("invite");
   const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState("customer");
   const [formError, setFormError] = useState("");
   const [formLoading, setFormLoading] = useState(false);
@@ -59,12 +61,23 @@ export default function AdminUsersPage() {
     setLoading(false);
   }
 
-  async function handleInviteUser(e: React.FormEvent) {
+  async function handleAddUser(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
     setFormLoading(true);
 
-    const result = await inviteUser(newEmail, newRole);
+    let result;
+    if (createMode === "manual") {
+      if (newPassword.length < 6) {
+        setFormError("Password must be at least 6 characters.");
+        setFormLoading(false);
+        return;
+      }
+      result = await createUserWithPassword(newEmail, newPassword, newRole);
+    } else {
+      result = await inviteUser(newEmail, newRole);
+    }
+
     if (result.error) {
       setFormError(result.error);
       setFormLoading(false);
@@ -72,6 +85,7 @@ export default function AdminUsersPage() {
     }
 
     setNewEmail("");
+    setNewPassword("");
     setNewRole("customer");
     setShowForm(false);
     setFormLoading(false);
@@ -164,10 +178,35 @@ export default function AdminUsersPage() {
         {/* Add User Form */}
         {showForm && (
           <form
-            onSubmit={handleInviteUser}
+            onSubmit={handleAddUser}
             className="bg-white/5 border border-white/10 rounded-lg p-4 mb-6 space-y-3"
           >
-            <h2 className="text-lg font-semibold mb-2">Invite User</h2>
+            <h2 className="text-lg font-semibold mb-2">Add User</h2>
+
+            <div className="flex gap-2 mb-2">
+              <button
+                type="button"
+                onClick={() => setCreateMode("invite")}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                  createMode === "invite"
+                    ? "bg-blue-500/20 text-blue-400 border-blue-400/30"
+                    : "bg-white/5 text-gray-400 border-white/10 hover:text-gray-300"
+                }`}
+              >
+                Send Invite Email
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreateMode("manual")}
+                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                  createMode === "manual"
+                    ? "bg-blue-500/20 text-blue-400 border-blue-400/30"
+                    : "bg-white/5 text-gray-400 border-white/10 hover:text-gray-300"
+                }`}
+              >
+                Set Login Manually
+              </button>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -195,6 +234,24 @@ export default function AdminUsersPage() {
               </div>
             </div>
 
+            {createMode === "manual" && (
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">Password</label>
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Min 6 characters"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Share these credentials with the user — they can log in straight away.
+                </p>
+              </div>
+            )}
+
             {formError && (
               <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
                 {formError}
@@ -206,7 +263,13 @@ export default function AdminUsersPage() {
               disabled={formLoading}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
             >
-              {formLoading ? "Sending invite..." : "Send Invite"}
+              {formLoading
+                ? createMode === "manual"
+                  ? "Creating user..."
+                  : "Sending invite..."
+                : createMode === "manual"
+                ? "Create User"
+                : "Send Invite"}
             </button>
           </form>
         )}

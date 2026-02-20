@@ -53,6 +53,32 @@ export async function inviteUser(email: string, role: string) {
   return { success: true };
 }
 
+export async function createUserWithPassword(
+  email: string,
+  password: string,
+  role: string
+) {
+  await requireAdmin();
+
+  const admin = getAdminClient();
+
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
+
+  if (error) return { error: error.message };
+
+  if (data.user) {
+    const updates: Record<string, any> = { invite_accepted: true };
+    if (role !== "customer") updates.role = role;
+    await admin.from("profiles").update(updates).eq("id", data.user.id);
+  }
+
+  return { success: true };
+}
+
 export async function updateUserRole(userId: string, role: string) {
   await requireAdmin();
 

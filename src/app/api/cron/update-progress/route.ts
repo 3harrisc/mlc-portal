@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
-import { COMPLETION_RADIUS_METERS, MIN_STANDSTILL_MINS, STANDSTILL_SPEED_KPH } from "@/lib/constants";
+import { COMPLETION_RADIUS_METERS, MIN_STANDSTILL_MINS } from "@/lib/constants";
 import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
 
@@ -170,7 +170,40 @@ export async function GET(req: Request) {
 
       const nsi = nextStopIndex(stops, p.completedIdx);
 
+      // All stops completed — but check if we still need to detect departure
+      // from the last completed stop
       if (nsi == null) {
+        if (p.onSiteIdx != null) {
+          const trackedPc = normalizePostcode(stops[p.onSiteIdx]);
+          const trackedLL = coordsMap.get(trackedPc);
+          const vehicleLLCheck: LngLat = { lng: pos.lng, lat: pos.lat };
+          const nearTracked = trackedLL
+            ? haversineMeters(vehicleLLCheck, trackedLL) <= COMPLETION_RADIUS_METERS
+            : false;
+
+          if (!nearTracked) {
+            const existingMeta: Record<number, any> = run.completed_meta ?? {};
+            const mergedMeta = { ...existingMeta };
+            if (mergedMeta[p.onSiteIdx]) {
+              mergedMeta[p.onSiteIdx] = {
+                ...mergedMeta[p.onSiteIdx],
+                atISO: new Date().toISOString(),
+              };
+            }
+            p.onSiteIdx = null;
+            p.onSiteSinceMs = null;
+
+            await sb.from("runs").update({
+              progress: p,
+              completed_meta: mergedMeta,
+            }).eq("id", run.id);
+
+            updated++;
+            results.push({ runId: run.id, vehicle: run.vehicle, status: "departure_stamped" });
+            continue;
+          }
+        }
+
         results.push({ runId: run.id, vehicle: run.vehicle, status: "all_done" });
         continue;
       }
@@ -183,31 +216,49 @@ export async function GET(req: Request) {
       }
 
       const vehicleLL: LngLat = { lng: pos.lng, lat: pos.lat };
-      const speedKph =
-        typeof pos.speed_kph === "number" ? pos.speed_kph : undefined;
       const distM = haversineMeters(vehicleLL, nextLL);
       const inside = distM <= COMPLETION_RADIUS_METERS;
       const nowMs = Date.now();
-      const stopped =
-        speedKph == null ? false : speedKph <= STANDSTILL_SPEED_KPH;
 
-      // ── Proximity / dwell logic (mirrors client) ──
+      // ── Proximity / dwell logic ──
+      // Completion = within radius for >= MIN_STANDSTILL_MINS (speed irrelevant).
+      // atISO (departure time) stamped only when vehicle actually leaves the radius.
+
+      let departureIdx: number | null = null;
+      let departureArrivedMs: number | null = null;
+
+      // 1. If we're tracking a completed stop (onSiteIdx differs from nsi
+      //    because nsi has advanced), check if vehicle is still near it.
+      if (p.onSiteIdx != null && p.onSiteIdx !== nsi) {
+        const trackedPc = normalizePostcode(stops[p.onSiteIdx]);
+        const trackedLL = coordsMap.get(trackedPc);
+        const nearTracked = trackedLL
+          ? haversineMeters(vehicleLL, trackedLL) <= COMPLETION_RADIUS_METERS
+          : false;
+
+        if (!nearTracked) {
+          // Vehicle has left the completed stop
+          if (p.completedIdx.includes(p.onSiteIdx)) {
+            departureIdx = p.onSiteIdx;
+            departureArrivedMs = p.onSiteSinceMs;
+          }
+          p.onSiteIdx = null;
+          p.onSiteSinceMs = null;
+        }
+        // else: still near the completed stop — keep tracking
+      }
+
+      // 2. Handle the next uncompleted stop
       if (inside) {
         if (p.onSiteIdx !== nsi) {
+          // Just arrived at this stop
           p.onSiteIdx = nsi;
-          p.onSiteSinceMs = stopped ? nowMs : null;
-          p.lastInside = true;
-        } else {
-          if (stopped) {
-            if (!p.onSiteSinceMs) p.onSiteSinceMs = nowMs;
-          } else {
-            p.onSiteSinceMs = null;
-          }
-          p.lastInside = true;
+          p.onSiteSinceMs = nowMs;
         }
+        // onSiteSinceMs never resets while inside (no speed check)
+        p.lastInside = true;
 
-        // Complete while still inside if dwell threshold met
-        // Keep onSiteIdx so UI still shows "ON SITE" until vehicle leaves
+        // Auto-complete if in radius for >= threshold
         if (
           p.onSiteSinceMs != null &&
           minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
@@ -216,26 +267,23 @@ export async function GET(req: Request) {
           p.completedIdx.sort((a, b) => a - b);
         }
       } else {
-        if (p.onSiteIdx === nsi && p.lastInside) {
-          const hadDwell =
-            p.onSiteSinceMs != null &&
-            minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS;
-
-          if (hadDwell) {
+        // Vehicle is NOT inside the next stop's radius
+        if (p.onSiteIdx === nsi) {
+          // Was tracking this stop, now left
+          const arrivedMs = p.onSiteSinceMs;
+          if (
+            arrivedMs != null &&
+            minutesBetween(arrivedMs, nowMs) >= MIN_STANDSTILL_MINS
+          ) {
             if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
             p.completedIdx.sort((a, b) => a - b);
           }
 
-          p.onSiteIdx = null;
-          p.onSiteSinceMs = null;
-        }
+          if (p.completedIdx.includes(nsi)) {
+            departureIdx = nsi;
+            departureArrivedMs = arrivedMs;
+          }
 
-        // Clear stale on-site state when stop was completed while inside
-        // but nextStopIndex has since advanced past it
-        if (
-          p.onSiteIdx != null &&
-          p.completedIdx.includes(p.onSiteIdx)
-        ) {
           p.onSiteIdx = null;
           p.onSiteSinceMs = null;
         }
@@ -246,31 +294,42 @@ export async function GET(req: Request) {
       // ── Build update payload ──
       const updateRow: Record<string, any> = { progress: p };
 
-      // Sync completed_stop_indexes & completed_meta when auto-completing
+      // Sync completed_stop_indexes & completed_meta
       const existingCompleted: number[] =
         run.completed_stop_indexes ?? [];
       const existingMeta: Record<
         number,
-        { atISO: string; by: "auto" | "admin"; arrivedISO?: string }
+        { atISO?: string; by: "auto" | "admin"; arrivedISO?: string }
       > = run.completed_meta ?? {};
 
       const newlyCompleted = p.completedIdx.filter(
         (idx) => !existingCompleted.includes(idx)
       );
 
-      if (newlyCompleted.length) {
+      if (newlyCompleted.length || departureIdx != null) {
         const mergedCompleted = [
           ...new Set([...existingCompleted, ...p.completedIdx]),
         ].sort((a, b) => a - b);
 
         const mergedMeta = { ...existingMeta };
+
+        // Record arrival for newly completed stops (no atISO yet — set on departure)
         for (const idx of newlyCompleted) {
+          const arrivedMs =
+            idx === departureIdx ? departureArrivedMs : p.onSiteSinceMs;
           mergedMeta[idx] = {
-            atISO: new Date().toISOString(),
             by: "auto",
-            arrivedISO: p.onSiteSinceMs
-              ? new Date(p.onSiteSinceMs).toISOString()
-              : undefined,
+            arrivedISO: arrivedMs
+              ? new Date(arrivedMs).toISOString()
+              : new Date().toISOString(),
+          };
+        }
+
+        // Stamp actual departure time
+        if (departureIdx != null && mergedMeta[departureIdx]) {
+          mergedMeta[departureIdx] = {
+            ...mergedMeta[departureIdx],
+            atISO: new Date().toISOString(),
           };
         }
 

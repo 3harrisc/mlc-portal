@@ -169,8 +169,8 @@ export default function ReportsPage() {
 
               // Get first arrival / last departure from completed_meta
               const meta = run.completedMeta ?? {};
-              const arrivalTimes = Object.values(meta).map((m) => m.arrivedISO ? new Date(m.arrivedISO).getTime() : new Date(m.atISO).getTime()).filter((t) => !isNaN(t));
-              const departureTimes = Object.values(meta).map((m) => new Date(m.atISO).getTime()).filter((t) => !isNaN(t));
+              const arrivalTimes = Object.values(meta).map((m) => m.arrivedISO ? new Date(m.arrivedISO).getTime() : m.atISO ? new Date(m.atISO).getTime() : NaN).filter((t) => !isNaN(t));
+              const departureTimes = Object.values(meta).filter((m) => m.atISO).map((m) => new Date(m.atISO!).getTime()).filter((t) => !isNaN(t));
               const firstDelivery = arrivalTimes.length ? new Date(Math.min(...arrivalTimes)).toISOString() : null;
               const lastDelivery = departureTimes.length ? new Date(Math.max(...departureTimes)).toISOString() : null;
 
@@ -265,7 +265,7 @@ export default function ReportsPage() {
                                     {stopMeta.arrivedISO && (
                                       <span className="text-gray-400">Arr {formatTime(stopMeta.arrivedISO)} — </span>
                                     )}
-                                    <span className="text-gray-300">Left {formatTime(stopMeta.atISO)}</span>
+                                    <span className="text-gray-300">{stopMeta.atISO ? `Left ${formatTime(stopMeta.atISO)}` : "On site"}</span>
                                     <span className="text-gray-600 ml-1.5">
                                       ({stopMeta.by === "auto" ? "auto" : "manual"})
                                     </span>

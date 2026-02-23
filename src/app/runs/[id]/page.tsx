@@ -13,7 +13,6 @@ import { rowToRun } from "@/types/runs";
 import {
   COMPLETION_RADIUS_METERS,
   MIN_STANDSTILL_MINS,
-  STANDSTILL_SPEED_KPH,
   HGV_TIME_MULTIPLIER,
   MAX_SPEED_KPH,
   MAX_DRIVE_BEFORE_BREAK_MINS,
@@ -435,6 +434,19 @@ export default function RunDetailPage() {
         const nsi = nextStopIndex(stops, p.completedIdx);
 
         if (nsi == null) {
+          // All stops done — check if we need to detect departure from last stop
+          if (p.onSiteIdx != null) {
+            const trackedPc = stops[p.onSiteIdx];
+            const trackedLL = coordsByPostcode[trackedPc];
+            const vehicleLLCheck: LngLat = { lng: data.lng, lat: data.lat };
+            const nearTracked = trackedLL
+              ? haversineMeters(vehicleLLCheck, trackedLL) <= COMPLETION_RADIUS_METERS
+              : false;
+            if (!nearTracked) {
+              p.onSiteIdx = null;
+              p.onSiteSinceMs = null;
+            }
+          }
           saveProgress(p);
           setEtaText("Done");
           setEtaDetails(null);
@@ -445,31 +457,35 @@ export default function RunDetailPage() {
         const nextLL = coordsByPostcode[nextPc];
 
         const vehicleLL: LngLat = { lng: data.lng, lat: data.lat };
-        const speedKph = typeof data.speedKph === "number" ? data.speedKph : undefined;
 
         if (nextLL) {
           const distM = haversineMeters(vehicleLL, nextLL);
           const inside = distM <= COMPLETION_RADIUS_METERS;
-
           const nowMs = Date.now();
-          const stopped = speedKph == null ? false : speedKph <= STANDSTILL_SPEED_KPH;
 
+          // 1. If tracking a completed stop (onSiteIdx differs from nsi),
+          //    check if vehicle is still near it.
+          if (p.onSiteIdx != null && p.onSiteIdx !== nsi) {
+            const trackedPc = stops[p.onSiteIdx];
+            const trackedLL = coordsByPostcode[trackedPc];
+            const nearTracked = trackedLL
+              ? haversineMeters(vehicleLL, trackedLL) <= COMPLETION_RADIUS_METERS
+              : false;
+
+            if (!nearTracked) {
+              p.onSiteIdx = null;
+              p.onSiteSinceMs = null;
+            }
+          }
+
+          // 2. Handle the next uncompleted stop
           if (inside) {
             if (p.onSiteIdx !== nsi) {
               p.onSiteIdx = nsi;
-              p.onSiteSinceMs = stopped ? nowMs : null;
-              p.lastInside = true;
-            } else {
-              if (stopped) {
-                if (!p.onSiteSinceMs) p.onSiteSinceMs = nowMs;
-              } else {
-                p.onSiteSinceMs = null;
-              }
-              p.lastInside = true;
+              p.onSiteSinceMs = nowMs;
             }
+            p.lastInside = true;
 
-            // Complete while still inside if dwell threshold met
-            // Keep onSiteIdx so UI still shows "ON SITE" until vehicle leaves
             if (
               p.onSiteSinceMs != null &&
               minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
@@ -478,29 +494,17 @@ export default function RunDetailPage() {
               p.completedIdx.sort((a, b) => a - b);
             }
           } else {
-            if (p.onSiteIdx === nsi && p.lastInside) {
-              const hadDwell =
-                p.onSiteSinceMs != null && minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS;
-
-              if (hadDwell) {
+            if (p.onSiteIdx === nsi) {
+              if (
+                p.onSiteSinceMs != null &&
+                minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
+              ) {
                 if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
                 p.completedIdx.sort((a, b) => a - b);
               }
-
               p.onSiteIdx = null;
               p.onSiteSinceMs = null;
             }
-
-            // Clear stale on-site state when stop was completed while inside
-            // but nextStopIndex has since advanced past it
-            if (
-              p.onSiteIdx != null &&
-              p.completedIdx.includes(p.onSiteIdx)
-            ) {
-              p.onSiteIdx = null;
-              p.onSiteSinceMs = null;
-            }
-
             p.lastInside = false;
           }
         }
@@ -1023,7 +1027,7 @@ export default function RunDetailPage() {
                         </div>
                         {status === "on_site" && progress?.onSiteSinceMs && (
                           <div className="text-xs text-gray-500">
-                            Stopped for {minutesBetween(progress.onSiteSinceMs, Date.now())} mins (will complete on leaving)
+                            On site for {minutesBetween(progress.onSiteSinceMs, Date.now())} mins
                           </div>
                         )}
                         {status === "completed" && run?.completedMeta?.[idx] && (
@@ -1032,9 +1036,11 @@ export default function RunDetailPage() {
                               <span>Arrived {new Date(run.completedMeta[idx].arrivedISO!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
                             )}
                             {run.completedMeta[idx].arrivedISO && run.completedMeta[idx].atISO && " — "}
-                            {run.completedMeta[idx].atISO && (
+                            {run.completedMeta[idx].atISO ? (
                               <span>Left {new Date(run.completedMeta[idx].atISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
-                            )}
+                            ) : run.completedMeta[idx].arrivedISO ? (
+                              <span> — Still on site</span>
+                            ) : null}
                           </div>
                         )}
                       </div>

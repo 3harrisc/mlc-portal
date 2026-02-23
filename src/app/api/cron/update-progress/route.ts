@@ -337,6 +337,47 @@ export async function GET(req: Request) {
         updateRow.completed_meta = mergedMeta;
       }
 
+      // ── Fallback: patch completed stops with missing atISO ──
+      // The client-side progress engine can clear onSiteIdx (detecting
+      // departure) but doesn't write completed_meta. This leaves stops
+      // with arrivedISO but no atISO. Patch them here.
+      {
+        const metaToCheck: Record<number, any> =
+          updateRow.completed_meta ?? existingMeta;
+        const completedToCheck: number[] =
+          updateRow.completed_stop_indexes ?? existingCompleted;
+        let patched = false;
+        const patchedMeta = { ...metaToCheck };
+
+        for (const idx of completedToCheck) {
+          const entry = patchedMeta[idx];
+          // Stop is completed but has no departure time, and we're not
+          // actively tracking it for departure
+          if (entry && !entry.atISO && p.onSiteIdx !== idx) {
+            patchedMeta[idx] = {
+              ...entry,
+              atISO: new Date().toISOString(),
+            };
+            patched = true;
+          }
+          // Stop is completed but has no meta at all
+          if (!entry && p.onSiteIdx !== idx) {
+            patchedMeta[idx] = {
+              by: "auto" as const,
+              atISO: new Date().toISOString(),
+            };
+            patched = true;
+          }
+        }
+
+        if (patched) {
+          updateRow.completed_meta = patchedMeta;
+          if (!updateRow.completed_stop_indexes) {
+            updateRow.completed_stop_indexes = completedToCheck;
+          }
+        }
+      }
+
       // ── Write to Supabase ──
       const { error: updateErr } = await sb
         .from("runs")

@@ -10,9 +10,17 @@ import type { PlannedRun, CustomerKey } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { fetchCustomerNames } from "@/lib/customers";
+import { parseStops } from "@/lib/postcode-utils";
 
 function norm(s: string) {
   return (s || "").trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function isRunComplete(r: PlannedRun): boolean {
+  const stops = parseStops(r.rawText);
+  if (!stops.length) return false;
+  const completed = r.completedStopIndexes ?? [];
+  return completed.length >= stops.length;
 }
 
 function runMatchesSearch(r: PlannedRun, q: string) {
@@ -178,12 +186,19 @@ export default function RunsPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filtered.map((r) => (
-                <div key={r.id} className="border border-white/10 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
+              {filtered.map((r) => {
+                const complete = isRunComplete(r);
+                return (
+                <div key={r.id} className={`border rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap ${complete ? "border-emerald-500/40 bg-emerald-500/5" : "border-white/10"}`}>
                   <div>
                     <div className="font-semibold text-lg">
                       {r.jobNumber} • {r.date} • {r.customer}
-                      {!r.vehicle?.trim() ? (
+                      {complete ? (
+                        <>
+                          {r.vehicle?.trim() && <span className="ml-2 text-gray-300 text-sm">{r.vehicle}</span>}
+                          <span className="ml-2 text-emerald-400 text-sm font-semibold">COMPLETE</span>
+                        </>
+                      ) : !r.vehicle?.trim() ? (
                         <span className="ml-2 text-yellow-300 text-sm font-semibold">UNASSIGNED</span>
                       ) : (
                         <span className="ml-2 text-gray-300 text-sm">{r.vehicle}</span>
@@ -206,7 +221,8 @@ export default function RunsPage() {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

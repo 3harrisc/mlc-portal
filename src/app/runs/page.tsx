@@ -19,8 +19,9 @@ function norm(s: string) {
 function isRunComplete(r: PlannedRun): boolean {
   const stops = parseStops(r.rawText);
   if (!stops.length) return false;
-  const completed = r.completedStopIndexes ?? [];
-  return completed.length >= stops.length;
+  const fromIndexes = (r.completedStopIndexes ?? []).length;
+  const fromProgress = (r.progress?.completedIdx ?? []).length;
+  return Math.max(fromIndexes, fromProgress) >= stops.length;
 }
 
 function runMatchesSearch(r: PlannedRun, q: string) {
@@ -219,8 +220,8 @@ export default function RunsPage() {
                   </div>
                   {carryOver.map((r) => {
                     const stops = parseStops(r.rawText);
-                    const completed = r.completedStopIndexes ?? [];
-                    const remaining = stops.length - completed.length;
+                    const completedCount = Math.max((r.completedStopIndexes ?? []).length, (r.progress?.completedIdx ?? []).length);
+                    const remaining = stops.length - completedCount;
                     return (
                     <div key={r.id} className="border border-amber-500/40 bg-amber-500/5 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
                       <div>
@@ -233,7 +234,7 @@ export default function RunsPage() {
                           )}
                         </div>
                         <div className="text-xs text-gray-400 mt-1">
-                          {completed.length}/{stops.length} stops completed •
+                          {completedCount}/{stops.length} stops completed •
                           From {r.fromPostcode} • {r.vehicle?.trim() || "UNASSIGNED"}
                         </div>
                       </div>

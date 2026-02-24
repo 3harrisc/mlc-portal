@@ -21,6 +21,8 @@ import {
 import { fetchCustomers } from "@/lib/customers";
 import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
+import { useNicknames } from "@/hooks/useNicknames";
+import { withNickname } from "@/lib/postcode-nicknames";
 import {
   DndContext,
   PointerSensor,
@@ -168,6 +170,7 @@ export default function RunDetailPage() {
   const router = useRouter();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
+  const nicknames = useNicknames();
 
   const [editingOrder, setEditingOrder] = useState(false);
   const [editStops, setEditStops] = useState<{ id: string; postcode: string }[]>([]);
@@ -1057,13 +1060,13 @@ export default function RunDetailPage() {
         </div>
 
         <div className="text-sm text-gray-400 mt-2">
-          From {normalizePostcode(run.fromPostcode)} •{" "}
+          From {withNickname(normalizePostcode(run.fromPostcode), nicknames)} •{" "}
           {run.returnToBase ? (
             <>Return to base</>
           ) : (
             <>
               To{" "}
-              <span className="text-gray-200 font-semibold">{effectiveEnd ? normalizePostcode(effectiveEnd) : "(not set)"}</span>
+              <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
             </>
           )}{" "}
           • Start {run.startTime} • Breaks {run.includeBreaks ? "On" : "Off"}
@@ -1326,7 +1329,7 @@ export default function RunDetailPage() {
 
                       <div>
                         <div className="font-semibold">
-                          {pc}
+                          {withNickname(pc, nicknames)}
                           {stopEtaMap[idx] && status !== "completed" && (
                             <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
                           )}

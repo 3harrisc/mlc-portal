@@ -144,7 +144,12 @@ export default function AdminCustomersPage() {
       <Navigation />
       <div className="max-w-6xl mx-auto p-4 md:p-8">
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-          <h1 className="text-xl md:text-3xl font-bold">Customer Management</h1>
+          <div>
+            <h1 className="text-xl md:text-3xl font-bold">Customer Management</h1>
+            <Link href="/admin/nicknames" className="text-sm text-blue-400 hover:text-blue-300 mt-1 inline-block">
+              Manage postcode nicknames &rarr;
+            </Link>
+          </div>
           <button
             onClick={() => setShowForm(!showForm)}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"

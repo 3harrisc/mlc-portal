@@ -11,6 +11,8 @@ import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { fetchCustomerNames } from "@/lib/customers";
 import { parseStops } from "@/lib/postcode-utils";
+import { useNicknames } from "@/hooks/useNicknames";
+import { withNickname } from "@/lib/postcode-nicknames";
 
 function norm(s: string) {
   return (s || "").trim().toUpperCase().replace(/\s+/g, " ");
@@ -46,6 +48,7 @@ export default function RunsPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   const allowedCustomers = profile?.allowed_customers ?? [];
+  const nicknames = useNicknames();
   const [runs, setRuns] = useState<PlannedRun[]>([]);
   const [date, setDate] = useState<string>(getInitialDate);
   const [customer, setCustomer] = useState<CustomerKey | "All">("All");
@@ -236,7 +239,7 @@ export default function RunsPage() {
                         </div>
                         <div className="text-xs text-gray-400 mt-1">
                           {completedCount}/{stops.length} stops completed •
-                          From {r.fromPostcode} • {r.vehicle?.trim() || "UNASSIGNED"}
+                          From {withNickname(r.fromPostcode, nicknames)} • {r.vehicle?.trim() || "UNASSIGNED"}
                         </div>
                       </div>
                       <div className="flex gap-2">
@@ -274,7 +277,7 @@ export default function RunsPage() {
                       )}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
-                      From {r.fromPostcode} • {r.returnToBase ? "Return to base" : (r.toPostcode ? `To ${r.toPostcode}` : "End at last drop")} •
+                      From {withNickname(r.fromPostcode, nicknames)} • {r.returnToBase ? "Return to base" : (r.toPostcode ? `To ${withNickname(r.toPostcode, nicknames)}` : "End at last drop")} •
                       Start {r.startTime} • Service {r.serviceMins}m • Breaks {r.includeBreaks ? "On" : "Off"}
                     </div>
                   </div>

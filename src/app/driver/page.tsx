@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import { updateRun as updateRunAction } from "@/app/actions/runs";
+import { createCost, deleteCost, listDriverCosts } from "@/app/actions/costs";
+import type { CostCategory } from "@/types/costs";
+import { COST_CATEGORIES, rowToCost, formatPence, type Cost } from "@/types/costs";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
 import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
@@ -16,6 +19,8 @@ import {
   type LngLat,
 } from "@/lib/geo-utils";
 import { todayISO } from "@/lib/time-utils";
+import { useNicknames } from "@/hooks/useNicknames";
+import { withNickname } from "@/lib/postcode-nicknames";
 import {
   COMPLETION_RADIUS_METERS,
   MIN_STANDSTILL_MINS,
@@ -101,6 +106,7 @@ export default function DriverPage() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+  const nicknames = useNicknames();
 
   const [run, setRun] = useState<PlannedRun | null>(null);
   const [runLoading, setRunLoading] = useState(true);
@@ -122,6 +128,15 @@ export default function DriverPage() {
     mins: number;
     km: number;
   } | null>(null);
+
+  // ── Cost tracking state ──
+  const [costs, setCosts] = useState<Cost[]>([]);
+  const [showCostForm, setShowCostForm] = useState(false);
+  const [costCategory, setCostCategory] = useState<CostCategory>("fuel");
+  const [costAmount, setCostAmount] = useState("");
+  const [costNote, setCostNote] = useState("");
+  const [costReceipt, setCostReceipt] = useState<File | null>(null);
+  const [costSubmitting, setCostSubmitting] = useState(false);
 
   const stops = useMemo(() => {
     if (!run) return [];
@@ -499,6 +514,69 @@ export default function DriverPage() {
     });
   }
 
+  // ── Load costs for today ──
+  useEffect(() => {
+    if (!run) return;
+    listDriverCosts(todayISO()).then((res) => {
+      if (!res.error) setCosts(res.costs.map(rowToCost));
+    });
+  }, [run]);
+
+  async function handleSubmitCost(e: React.FormEvent) {
+    e.preventDefault();
+    if (!run || !user) return;
+    setCostSubmitting(true);
+
+    let receiptUrl: string | null = null;
+
+    // Upload receipt if provided
+    if (costReceipt) {
+      const supabase = createClient();
+      const ext = costReceipt.name.split(".").pop() || "jpg";
+      const path = `${user.id}/${Date.now()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage
+        .from("receipts")
+        .upload(path, costReceipt, { upsert: false });
+      if (!uploadErr) {
+        receiptUrl = path;
+      }
+    }
+
+    const amountPence = Math.round(parseFloat(costAmount) * 100);
+    if (isNaN(amountPence) || amountPence <= 0) {
+      setCostSubmitting(false);
+      return;
+    }
+
+    const result = await createCost({
+      runId: run.id,
+      vehicle: profile?.assigned_vehicle ?? "",
+      date: todayISO(),
+      category: costCategory,
+      amount: amountPence,
+      note: costNote,
+      receiptUrl,
+    });
+
+    if (!result.error) {
+      // Reload costs
+      const res = await listDriverCosts(todayISO());
+      if (!res.error) setCosts(res.costs.map(rowToCost));
+      setShowCostForm(false);
+      setCostAmount("");
+      setCostNote("");
+      setCostReceipt(null);
+      setCostCategory("fuel");
+    }
+    setCostSubmitting(false);
+  }
+
+  async function handleDeleteCost(id: string) {
+    if (!confirm("Delete this cost entry?")) return;
+    await deleteCost(id);
+    setCosts((prev) => prev.filter((c) => c.id !== id));
+  }
+
   // ── Sign out ──
   async function handleSignOut() {
     const supabase = createClient();
@@ -615,7 +693,7 @@ export default function DriverPage() {
             {run.jobNumber} &bull; {run.customer}
           </div>
           <div className="text-sm text-gray-400 mt-1">
-            From {run.fromPostcode}
+            From {withNickname(run.fromPostcode, nicknames)}
             {run.toPostcode ? ` \u2192 ${run.toPostcode}` : ""}
           </div>
         </div>
@@ -626,7 +704,7 @@ export default function DriverPage() {
             <div className="text-xs text-blue-300 font-semibold uppercase tracking-wide">
               Next Stop
             </div>
-            <div className="text-2xl font-bold mt-1">{nextPc}</div>
+            <div className="text-2xl font-bold mt-1">{withNickname(nextPc, nicknames)}</div>
             <div className="text-sm text-blue-200 mt-1">
               {etaText !== "—" && etaText !== "Done" ? (
                 <>
@@ -705,7 +783,7 @@ export default function DriverPage() {
                         {idx + 1}
                       </div>
                       <div className="min-w-0">
-                        <div className="font-semibold">{pc}</div>
+                        <div className="font-semibold">{withNickname(pc, nicknames)}</div>
                         {status === "completed" &&
                           run?.completedMeta?.[idx] && (
                             <div className="text-xs text-gray-500">
@@ -777,6 +855,162 @@ export default function DriverPage() {
               );
             })}
           </div>
+        </div>
+
+        {/* ── Costs section ── */}
+        <div className="border border-white/10 rounded-xl p-4 bg-white/5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm font-semibold text-gray-400">
+              COSTS TODAY &nbsp;
+              {costs.length > 0 && (
+                <span className="text-white">
+                  ({costs.length} logged &mdash;{" "}
+                  {formatPence(costs.reduce((sum, c) => sum + c.amount, 0))})
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowCostForm(!showCostForm)}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+            >
+              {showCostForm ? "Cancel" : "+ Log Cost"}
+            </button>
+          </div>
+
+          {/* Cost form */}
+          {showCostForm && (
+            <form
+              onSubmit={handleSubmitCost}
+              className="border border-white/10 rounded-xl p-3 mb-3 space-y-3 bg-white/5"
+            >
+              {/* Category buttons */}
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">Category</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {COST_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.value}
+                      type="button"
+                      onClick={() => setCostCategory(cat.value)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                        costCategory === cat.value
+                          ? "bg-blue-500/20 text-blue-400 border-blue-400/30"
+                          : "bg-white/5 text-gray-400 border-white/10"
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">Amount</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-400 font-semibold">&pound;</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    value={costAmount}
+                    onChange={(e) => setCostAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="flex-1 px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                  />
+                </div>
+              </div>
+
+              {/* Note */}
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">
+                  Note <span className="text-gray-600">(optional)</span>
+                </div>
+                <input
+                  type="text"
+                  value={costNote}
+                  onChange={(e) => setCostNote(e.target.value)}
+                  placeholder="e.g. BP M1 Services"
+                  className="w-full px-3 py-2.5 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                />
+              </div>
+
+              {/* Receipt upload */}
+              <div>
+                <div className="text-xs text-gray-400 mb-1.5">
+                  Receipt <span className="text-gray-600">(optional)</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) =>
+                    setCostReceipt(e.target.files?.[0] ?? null)
+                  }
+                  className="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-white/10 file:text-white file:font-medium file:cursor-pointer"
+                />
+                {costReceipt && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    {costReceipt.name}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={costSubmitting}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-base font-semibold transition-colors"
+              >
+                {costSubmitting ? "Saving..." : "Save Cost"}
+              </button>
+            </form>
+          )}
+
+          {/* Costs list */}
+          {costs.length > 0 ? (
+            <div className="space-y-2">
+              {costs.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center justify-between gap-2 border border-white/5 rounded-lg px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-white/10 text-gray-300 uppercase">
+                        {c.category}
+                      </span>
+                      <span className="font-semibold text-sm">
+                        {formatPence(c.amount)}
+                      </span>
+                    </div>
+                    {c.note && (
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">
+                        {c.note}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {c.receiptUrl && (
+                      <span className="text-xs text-blue-400">Receipt</span>
+                    )}
+                    <button
+                      onClick={() => handleDeleteCost(c.id)}
+                      className="text-xs text-red-400 hover:text-red-300 px-2 py-1"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            !showCostForm && (
+              <div className="text-sm text-gray-600 text-center py-2">
+                No costs logged today
+              </div>
+            )
+          )}
         </div>
       </div>
     </div>

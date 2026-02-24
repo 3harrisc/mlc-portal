@@ -74,6 +74,14 @@ export default function RunsPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [runs]);
 
+  // Previous day relative to the selected date filter
+  const prevDate = useMemo(() => {
+    if (!date) return "";
+    const d = new Date(date + "T00:00:00");
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }, [date]);
+
   const filtered = useMemo(() => {
     return runs
       .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
@@ -83,6 +91,18 @@ export default function RunsPage() {
       .filter((r) => runMatchesSearch(r, search))
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [runs, date, customer, vehicle, search, isAdmin, allowedCustomers]);
+
+  // Carry-over: previous day's runs that still have uncompleted stops
+  const carryOver = useMemo(() => {
+    if (!date || !prevDate) return [];
+    return runs
+      .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
+      .filter((r) => r.date === prevDate)
+      .filter((r) => !isRunComplete(r) && parseStops(r.rawText).length > 0)
+      .filter((r) => (customer === "All" ? true : r.customer === customer))
+      .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))
+      .filter((r) => runMatchesSearch(r, search));
+  }, [runs, date, prevDate, customer, vehicle, search, isAdmin, allowedCustomers]);
 
   const unassignedCount = useMemo(
     () => filtered.filter((r) => !r.vehicle?.trim()).length,
@@ -186,12 +206,50 @@ export default function RunsPage() {
         <div className="mt-6 border border-white/10 rounded-2xl p-4 bg-white/5">
           {loading ? (
             <div className="text-gray-400">Loading runs...</div>
-          ) : filtered.length === 0 ? (
+          ) : filtered.length === 0 && carryOver.length === 0 ? (
             <div className="text-gray-400">
               No runs found. Create one in <Link className="text-blue-400 underline" href="/plan-route">Plan Route</Link>.
             </div>
           ) : (
             <div className="space-y-3">
+              {carryOver.length > 0 && (
+                <>
+                  <div className="text-xs text-amber-400 font-semibold uppercase tracking-wide">
+                    Continued from {prevDate} ({carryOver.length} run{carryOver.length === 1 ? "" : "s"} with remaining drops)
+                  </div>
+                  {carryOver.map((r) => {
+                    const stops = parseStops(r.rawText);
+                    const completed = r.completedStopIndexes ?? [];
+                    const remaining = stops.length - completed.length;
+                    return (
+                    <div key={r.id} className="border border-amber-500/40 bg-amber-500/5 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
+                      <div>
+                        <div className="font-semibold text-lg">
+                          {r.jobNumber} • {r.date} • {r.customer}
+                          {r.vehicle?.trim() && <span className="ml-2 text-gray-300 text-sm">{r.vehicle}</span>}
+                          <span className="ml-2 text-amber-400 text-sm font-semibold">{remaining} DROP{remaining === 1 ? "" : "S"} REMAINING</span>
+                          {r.loadRef && (
+                            <span className="ml-2 text-blue-300 text-sm font-medium">Ref: {r.loadRef}</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          {completed.length}/{stops.length} stops completed •
+                          From {r.fromPostcode} • {r.vehicle?.trim() || "UNASSIGNED"}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Link href={`/runs/${r.id}`} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">
+                          Open
+                        </Link>
+                      </div>
+                    </div>
+                    );
+                  })}
+                  {filtered.length > 0 && (
+                    <div className="border-t border-white/10 pt-2" />
+                  )}
+                </>
+              )}
               {filtered.map((r) => {
                 const complete = isRunComplete(r);
                 return (

@@ -88,12 +88,15 @@ export async function GET(req: Request) {
   const sb = getSupabaseAdmin();
 
   try {
-    // 1. Fetch today's runs that have a vehicle assigned
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    // 1. Fetch runs that need tracking: today's runs + yesterday's incomplete runs
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+
     const { data: runs, error: runsErr } = await sb
       .from("runs")
       .select("*")
-      .eq("date", today)
+      .in("date", [today, yesterday])
       .neq("vehicle", "");
 
     if (runsErr) {
@@ -107,7 +110,25 @@ export async function GET(req: Request) {
     if (!runs?.length) {
       return NextResponse.json({
         ok: true,
-        message: "No active runs today",
+        message: "No active runs",
+        updated: 0,
+        durationMs: Date.now() - startMs,
+      });
+    }
+
+    // Filter out yesterday's runs that are already fully complete
+    const activeRuns = runs.filter((r: any) => {
+      if (r.date === today) return true;
+      // Yesterday's run — only keep if it has uncompleted stops
+      const stops = parseStops(r.raw_text ?? "");
+      const completed = r.completed_stop_indexes ?? [];
+      return stops.length > 0 && completed.length < stops.length;
+    });
+
+    if (!activeRuns.length) {
+      return NextResponse.json({
+        ok: true,
+        message: "No active runs",
         updated: 0,
         durationMs: Date.now() - startMs,
       });
@@ -117,7 +138,7 @@ export async function GET(req: Request) {
     const allPostcodes = new Set<string>();
     const runStopsMap = new Map<string, string[]>();
 
-    for (const run of runs) {
+    for (const run of activeRuns) {
       const stops = parseStops(run.raw_text ?? "");
       runStopsMap.set(run.id, stops);
       for (const pc of stops) allPostcodes.add(normalizePostcode(pc));
@@ -128,7 +149,7 @@ export async function GET(req: Request) {
     // 3. Fetch all vehicle positions we need (batch)
     const vehicleNames = [
       ...new Set(
-        runs
+        activeRuns
           .map((r: any) => normVehicle(r.vehicle))
           .filter(Boolean)
       ),
@@ -148,7 +169,7 @@ export async function GET(req: Request) {
     let updated = 0;
     const results: { runId: string; vehicle: string; status: string }[] = [];
 
-    for (const run of runs) {
+    for (const run of activeRuns) {
       const stops = runStopsMap.get(run.id) ?? [];
       if (!stops.length) {
         results.push({ runId: run.id, vehicle: run.vehicle, status: "no_stops" });
@@ -409,7 +430,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       ok: true,
       updated,
-      total: runs.length,
+      total: activeRuns.length,
       geocodedPostcodes: coordsMap.size,
       results,
       durationMs: Date.now() - startMs,

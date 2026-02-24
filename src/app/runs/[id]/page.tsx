@@ -598,7 +598,27 @@ export default function RunDetailPage() {
           }
         }
 
-        if (progressChanged(current, p)) saveProgress(p);
+        if (progressChanged(current, p)) {
+          saveProgress(p);
+
+          // If client detected new completions, also sync completed_stop_indexes + completed_meta
+          const newlyCompleted = p.completedIdx.filter((idx) => !current.completedIdx.includes(idx));
+          if (newlyCompleted.length) {
+            const arrivedISO = current.onSiteSinceMs
+              ? new Date(current.onSiteSinceMs).toISOString()
+              : new Date().toISOString();
+            setRun((prev) => {
+              if (!prev) return prev;
+              const merged = [...new Set([...(prev.completedStopIndexes ?? []), ...newlyCompleted])].sort((a, b) => a - b);
+              const meta: Record<number, any> = { ...(prev.completedMeta ?? {}) };
+              for (const idx of newlyCompleted) {
+                if (!meta[idx]) meta[idx] = { by: "auto" as const, arrivedISO };
+              }
+              updateRunAction(prev.id, { completedStopIndexes: merged, completedMeta: meta });
+              return { ...prev, completedStopIndexes: merged, completedMeta: meta };
+            });
+          }
+        }
 
         // ---- ETA engine (vehicle -> next not-completed stop) ----
         const nsi2 = nextStopIndex(stops, p.completedIdx);

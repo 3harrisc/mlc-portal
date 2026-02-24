@@ -111,6 +111,7 @@ export default function RunsPage() {
   );
 
   async function handleDelete(id: string) {
+    if (!confirm("Are you sure you want to delete this run?")) return;
     setRuns((prev) => prev.filter((r) => r.id !== id));
     await deleteRunAction(id);
   }

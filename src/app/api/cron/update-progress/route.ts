@@ -170,6 +170,7 @@ export async function GET(req: Request) {
     const results: { runId: string; vehicle: string; status: string }[] = [];
 
     for (const run of activeRuns) {
+      try {
       const stops = runStopsMap.get(run.id) ?? [];
       if (!stops.length) {
         results.push({ runId: run.id, vehicle: run.vehicle, status: "no_stops" });
@@ -424,6 +425,11 @@ export async function GET(req: Request) {
             ? `completed_stops: [${newlyCompleted.join(",")}]`
             : "updated",
         });
+      }
+      } catch (runErr: unknown) {
+        const msg = runErr instanceof Error ? runErr.message : String(runErr);
+        console.error(`[update-progress] Error processing run ${run.id}:`, msg);
+        results.push({ runId: run.id, vehicle: run.vehicle, status: `error: ${msg}` });
       }
     }
 

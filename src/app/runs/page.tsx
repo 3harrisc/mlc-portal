@@ -35,12 +35,18 @@ function runMatchesSearch(r: PlannedRun, q: string) {
   return false;
 }
 
+function getInitialDate(): string {
+  if (typeof window === "undefined") return todayISO();
+  const params = new URLSearchParams(window.location.search);
+  return params.get("date") || todayISO();
+}
+
 export default function RunsPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   const allowedCustomers = profile?.allowed_customers ?? [];
   const [runs, setRuns] = useState<PlannedRun[]>([]);
-  const [date, setDate] = useState<string>(todayISO());
+  const [date, setDate] = useState<string>(getInitialDate);
   const [customer, setCustomer] = useState<CustomerKey | "All">("All");
   const [vehicle, setVehicle] = useState<string>("");
   const [search, setSearch] = useState<string>("");

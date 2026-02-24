@@ -17,8 +17,8 @@ import {
   MAX_SPEED_KPH,
   MAX_DRIVE_BEFORE_BREAK_MINS,
   BREAK_MINS,
-  AFTER_HOURS_CUTOFF_MINS,
 } from "@/lib/constants";
+import { fetchCustomers } from "@/lib/customers";
 import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
 import {
@@ -102,7 +102,7 @@ function addBreaksIfNeeded(driveMins: number, includeBreaks: boolean) {
   return breaks * BREAK_MINS;
 }
 
-function etaFromNowPlusMinutes(totalMins: number) {
+function etaFromNowPlusMinutes(totalMins: number, cutoffMins: number) {
   const now = new Date();
   const eta = new Date(now.getTime() + totalMins * 60_000);
 
@@ -115,7 +115,7 @@ function etaFromNowPlusMinutes(totalMins: number) {
   ).padStart(2, "0")}`;
 
   const minsOfDay = eta.getHours() * 60 + eta.getMinutes();
-  return { hhmm, etaDate, afterHours: minsOfDay >= AFTER_HOURS_CUTOFF_MINS };
+  return { hhmm, etaDate, afterHours: minsOfDay >= cutoffMins };
 }
 
 function SortableStopRow({ id, postcode, index }: { id: string; postcode: string; index: number }) {
@@ -162,6 +162,9 @@ export default function RunDetailPage() {
   const [editingOrder, setEditingOrder] = useState(false);
   const [editStops, setEditStops] = useState<{ id: string; postcode: string }[]>([]);
   const [reRouting, setReRouting] = useState(false);
+  const [addingDrop, setAddingDrop] = useState(false);
+  const [newDropPC, setNewDropPC] = useState("");
+  const [newDropPos, setNewDropPos] = useState<number>(-1); // -1 = end
 
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -182,6 +185,9 @@ export default function RunDetailPage() {
     null
   );
   const [etaChain, setEtaChain] = useState<EtaChainResult | null>(null);
+
+  // Customer opening/closing times (fetched from DB)
+  const [customerTimes, setCustomerTimes] = useState<{ open: string; close: string }>({ open: "08:00", close: "17:00" });
 
   // Debounce timer for persisting progress to DB
   const progressSaveTimer = useRef<any>(null);
@@ -207,6 +213,21 @@ export default function RunDetailPage() {
         setRunLoading(false);
       });
   }, [runId]);
+
+  // Fetch customer open/close times from DB
+  useEffect(() => {
+    if (!run) return;
+    fetchCustomers().then((customers) => {
+      const c = customers.find((cust) => cust.name === run.customer);
+      if (c) setCustomerTimes({ open: c.open_time, close: c.close_time });
+    });
+  }, [run?.customer]);
+
+  // Parse cutoff minutes from customer close time
+  const cutoffMins = useMemo(() => {
+    const m = customerTimes.close.match(/^(\d{2}):(\d{2})$/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : 17 * 60;
+  }, [customerTimes.close]);
 
   const stops = useMemo(() => {
     if (!run) return [];
@@ -354,6 +375,8 @@ export default function RunDetailPage() {
             maxDriveBeforeBreakMins: MAX_DRIVE_BEFORE_BREAK_MINS,
             breakMins: BREAK_MINS,
             serviceMins: currentRun.serviceMins,
+            nextDayStartHHMM: customerTimes.open,
+            nextDayCutoffHHMM: customerTimes.close,
           },
         });
         if (!cancelled) setEtaChain(chain);
@@ -365,7 +388,7 @@ export default function RunDetailPage() {
     compute();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.id, run?.startTime, run?.includeBreaks, run?.serviceMins, isFutureRun, vehicleSnap?.lat, vehicleSnap?.lng, coordsByPostcode, stops.join("|"), mapboxToken]);
+  }, [run?.id, run?.startTime, run?.includeBreaks, run?.serviceMins, isFutureRun, vehicleSnap?.lat, vehicleSnap?.lng, coordsByPostcode, stops.join("|"), mapboxToken, customerTimes]);
 
   // Build a map: stop index -> ETA label from the chain
   const stopEtaMap = useMemo(() => {
@@ -538,7 +561,7 @@ export default function RunDetailPage() {
         const breakMins = addBreaksIfNeeded(mins, run.includeBreaks);
         const totalMins = mins + breakMins;
 
-        const eta = etaFromNowPlusMinutes(totalMins);
+        const eta = etaFromNowPlusMinutes(totalMins, cutoffMins);
 
         setEtaText(eta.hhmm);
         setEtaDetails({ mins: totalMins, km, etaDate: eta.etaDate, afterHours: eta.afterHours });
@@ -558,7 +581,7 @@ export default function RunDetailPage() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [run?.id, run?.vehicle, run?.includeBreaks, isFutureRun, coordsByPostcode, stops.join("|"), mapboxToken]);
+  }, [run?.id, run?.vehicle, run?.includeBreaks, isFutureRun, coordsByPostcode, stops.join("|"), mapboxToken, cutoffMins]);
 
   const stopStatuses = useMemo(() => {
     const out: StopStatus[] = stops.map(() => "pending");
@@ -670,6 +693,66 @@ export default function RunDetailPage() {
     }
   }
 
+  async function handleAddDrop() {
+    if (!run || !isAdmin || !newDropPC.trim()) return;
+
+    const pc = normalizePostcode(newDropPC.trim());
+    if (!pc) return;
+
+    const currentStops = [...stops];
+    const insertAt = newDropPos < 0 || newDropPos > currentStops.length
+      ? currentStops.length
+      : newDropPos;
+
+    currentStops.splice(insertAt, 0, pc);
+    const newRawText = currentStops.join("\n");
+
+    // Shift all index-based tracking data at or after insertion point
+    const shiftIdx = (idx: number) => idx >= insertAt ? idx + 1 : idx;
+
+    const current = progressRef.current ?? DEFAULT_PROGRESS;
+    const newCompletedIdx = current.completedIdx.map(shiftIdx).sort((a, b) => a - b);
+    const newOnSiteIdx = current.onSiteIdx != null ? shiftIdx(current.onSiteIdx) : null;
+
+    const newProgress: ProgressState = {
+      ...current,
+      completedIdx: newCompletedIdx,
+      onSiteIdx: newOnSiteIdx,
+    };
+
+    const existingCompleted = (run.completedStopIndexes ?? []).map(shiftIdx).sort((a, b) => a - b);
+
+    const existingMeta = run.completedMeta ?? {};
+    const newMeta: Record<number, any> = {};
+    for (const [k, v] of Object.entries(existingMeta)) {
+      newMeta[shiftIdx(Number(k))] = v;
+    }
+
+    await updateRunAction(run.id, {
+      rawText: newRawText,
+      progress: newProgress,
+      completedStopIndexes: existingCompleted,
+      completedMeta: newMeta,
+    });
+
+    setRun({
+      ...run,
+      rawText: newRawText,
+      progress: newProgress,
+      completedStopIndexes: existingCompleted,
+      completedMeta: newMeta,
+    });
+    setProgress(newProgress);
+    progressRef.current = newProgress;
+
+    // Pre-geocode the new postcode
+    ensureCoords([pc]).catch(() => {});
+
+    setNewDropPC("");
+    setNewDropPos(-1);
+    setAddingDrop(false);
+  }
+
   function handleStartEditOrder() {
     if (!isAdmin) return;
     setEditStops(stops.map((pc, i) => ({ id: `stop-${i}`, postcode: pc })));
@@ -739,12 +822,12 @@ export default function RunDetailPage() {
 
   const vehicleAssigned = (run.vehicle || "").trim().length > 0;
 
-  // label: show "Next day" if date rollover OR after 17:00
+  // label: show "Next day [opening time]" if ETA falls past customer closing time
   const etaLabel =
     etaText === "—" || etaText === "Done"
       ? etaText
       : etaDetails && (etaDetails.etaDate !== run.date || etaDetails.afterHours)
-      ? `Next day ${etaText}`
+      ? `Next day ${customerTimes.open}`
       : etaText;
 
   return (
@@ -752,7 +835,7 @@ export default function RunDetailPage() {
       <Navigation />
       <div className="max-w-6xl mx-auto p-4 md:p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <Link href="/runs" className="text-blue-400 underline">
+          <Link href={`/runs?date=${run?.date ?? ""}`} className="text-blue-400 underline">
             ← Back to runs
           </Link>
 
@@ -941,12 +1024,20 @@ export default function RunDetailPage() {
 
             <div className="flex items-center gap-3">
               {isAdmin && !editingOrder && (
-                <button
-                  onClick={handleStartEditOrder}
-                  className="px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
-                >
-                  Edit order
-                </button>
+                <>
+                  <button
+                    onClick={handleStartEditOrder}
+                    className="px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
+                  >
+                    Edit order
+                  </button>
+                  <button
+                    onClick={() => { setAddingDrop(!addingDrop); setNewDropPC(""); setNewDropPos(-1); }}
+                    className="px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
+                  >
+                    {addingDrop ? "Cancel" : "Add drop"}
+                  </button>
+                </>
               )}
               {!editingOrder && (
                 <div className="text-sm text-gray-400">
@@ -958,6 +1049,41 @@ export default function RunDetailPage() {
               )}
             </div>
           </div>
+
+          {addingDrop && (
+            <div className="mt-3 flex items-end gap-3 flex-wrap border border-white/10 rounded-xl p-3 bg-white/5">
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Postcode</label>
+                <input
+                  value={newDropPC}
+                  onChange={(e) => setNewDropPC(e.target.value.toUpperCase())}
+                  placeholder="e.g. SW1A 1AA"
+                  className="w-40 border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAddDrop(); }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Position</label>
+                <select
+                  value={newDropPos}
+                  onChange={(e) => setNewDropPos(Number(e.target.value))}
+                  className="w-40 border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
+                >
+                  <option value={-1} className="bg-black">End (after stop {stops.length})</option>
+                  {stops.map((pc, i) => (
+                    <option key={i} value={i} className="bg-black">Before stop {i + 1} ({pc})</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handleAddDrop}
+                disabled={!newDropPC.trim()}
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+          )}
 
           {editingOrder ? (
             <>

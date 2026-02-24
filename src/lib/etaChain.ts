@@ -238,24 +238,35 @@ export async function buildEtaChain(params: {
     const departAt = new Date(cursor);
     cursor = addMins(cursor, driveMins + insertedBreak);
 
-    const arriveAt = new Date(cursor);
+    let arriveAt = new Date(cursor);
 
     // service time applies only when arriving at a STOP (not vehicle, not end)
     let serviceMins = 0;
     if (to.label.startsWith("Stop")) {
+      // If arrival is past the working day cutoff, the customer won't be
+      // available until they open — roll arrival to next day opening time.
+      const arriveMins = arriveAt.getHours() * 60 + arriveAt.getMinutes();
+      if (arriveMins >= cutoffMins) {
+        const rolled = new Date(arriveAt);
+        rolled.setDate(rolled.getDate() + 1);
+        rolled.setHours(Math.floor(nextDayStartMins / 60), nextDayStartMins % 60, 0, 0);
+        arriveAt = rolled;
+        cursor = new Date(arriveAt);
+        driveSinceBreak = 0;
+      }
+
       serviceMins = serviceMinsDefault;
       cursor = addMins(cursor, serviceMins);
       totalServiceMins += serviceMins;
 
-      // Next-day rollover: if cursor is past the working day cutoff,
-      // roll forward to next day start (e.g. 08:00)
+      // If departure (post-service) is past cutoff, roll cursor to next day
       const cursorMins = cursor.getHours() * 60 + cursor.getMinutes();
       if (cursorMins >= cutoffMins) {
         const nextDay = new Date(cursor);
         nextDay.setDate(nextDay.getDate() + 1);
         nextDay.setHours(Math.floor(nextDayStartMins / 60), nextDayStartMins % 60, 0, 0);
         cursor = nextDay;
-        driveSinceBreak = 0; // fresh driving window next day
+        driveSinceBreak = 0;
       }
     }
 

@@ -1015,9 +1015,9 @@ export default function RunDetailPage() {
       <Navigation />
       <div className="max-w-6xl mx-auto p-4 md:p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <Link href={`/runs?date=${run?.date ?? ""}`} className="text-blue-400 underline">
+          <button onClick={() => router.back()} className="text-blue-400 underline">
             ← Back to runs
-          </Link>
+          </button>
 
           <span className="text-sm text-gray-300">
             Mode:{" "}

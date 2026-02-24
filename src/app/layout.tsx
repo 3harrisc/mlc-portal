@@ -17,11 +17,18 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "MLC Portal",
   description: "MLC Logistics Portal — Route Planning & Live Tracking",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "MLC Driver",
+  },
 };
 
 export const viewport = {
   width: "device-width",
   initialScale: 1,
+  themeColor: "#000000",
 };
 
 export default function RootLayout({

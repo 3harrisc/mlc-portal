@@ -66,6 +66,16 @@ export default function Navigation() {
               {profile?.role === "admin" && (
                 <>
                   <Link
+                    href="/admin/drivers"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/drivers")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Drivers
+                  </Link>
+                  <Link
                     href="/admin/users"
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                       isActive("/admin/users")
@@ -149,6 +159,17 @@ export default function Navigation() {
 
           {profile?.role === "admin" && (
             <>
+              <Link
+                href="/admin/drivers"
+                onClick={() => setMenuOpen(false)}
+                className={`block px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  isActive("/admin/drivers")
+                    ? "bg-emerald-600 text-white"
+                    : "text-gray-300 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                Drivers
+              </Link>
               <Link
                 href="/admin/users"
                 onClick={() => setMenuOpen(false)}

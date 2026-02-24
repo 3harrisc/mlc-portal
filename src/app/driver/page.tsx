@@ -128,6 +128,13 @@ export default function DriverPage() {
     return parseStops(run.rawText);
   }, [run]);
 
+  // ── Register service worker for PWA ──
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
   // ── Load run for today matching driver's assigned vehicle ──
   useEffect(() => {
     if (authLoading) return;

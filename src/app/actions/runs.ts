@@ -31,7 +31,7 @@ export async function updateRun(
     rawText: string;
     progress: ProgressState;
     completedStopIndexes: number[];
-    completedMeta: Record<number, { atISO?: string; by: "auto" | "admin"; arrivedISO?: string }>;
+    completedMeta: Record<number, { atISO?: string; by: "auto" | "admin" | "driver"; arrivedISO?: string }>;
   }>
 ) {
   const { supabase } = await getUser();

@@ -111,7 +111,7 @@ export async function listUsers() {
   const admin = getAdminClient();
   const { data, error } = await admin
     .from("profiles")
-    .select("id, email, full_name, role, active, allowed_customers, created_at, invite_accepted")
+    .select("id, email, full_name, role, active, allowed_customers, created_at, invite_accepted, assigned_vehicle")
     .order("created_at", { ascending: true });
 
   if (error) return { error: error.message, users: [] };
@@ -168,6 +168,17 @@ export async function markInviteAccepted() {
     .update({ invite_accepted: true, updated_at: new Date().toISOString() })
     .eq("id", user.id);
 
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function updateAssignedVehicle(userId: string, vehicle: string | null) {
+  await requireAdmin();
+  const admin = getAdminClient();
+  const { error } = await admin
+    .from("profiles")
+    .update({ assigned_vehicle: vehicle, updated_at: new Date().toISOString() })
+    .eq("id", userId);
   if (error) return { error: error.message };
   return { success: true };
 }

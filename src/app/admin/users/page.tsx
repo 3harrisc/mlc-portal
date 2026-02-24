@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { inviteUser, createUserWithPassword, updateUserRole, toggleUserActive, updateAllowedCustomers, listUsers, resendInvite, deleteUser } from "./actions";
+import { inviteUser, createUserWithPassword, updateUserRole, toggleUserActive, updateAllowedCustomers, updateAssignedVehicle, listUsers, resendInvite, deleteUser } from "./actions";
 import { fetchCustomerNames } from "@/lib/customers";
 
 type UserRow = {
@@ -16,6 +16,7 @@ type UserRow = {
   allowed_customers: string[];
   created_at: string;
   invite_accepted: boolean;
+  assigned_vehicle: string | null;
 };
 
 export default function AdminUsersPage() {
@@ -131,6 +132,18 @@ export default function AdminUsersPage() {
       return;
     }
     await loadUsers();
+  }
+
+  const vehicleTimers = useRef<Record<string, any>>({});
+
+  function handleVehicleChange(userId: string, vehicle: string) {
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, assigned_vehicle: vehicle } : u))
+    );
+    if (vehicleTimers.current[userId]) clearTimeout(vehicleTimers.current[userId]);
+    vehicleTimers.current[userId] = setTimeout(() => {
+      updateAssignedVehicle(userId, vehicle.trim() || null);
+    }, 500);
   }
 
   async function handleCustomerToggle(userId: string, customer: string, current: string[]) {
@@ -376,6 +389,19 @@ export default function AdminUsersPage() {
                     {(!u.allowed_customers || u.allowed_customers.length === 0) && (
                       <div className="text-xs text-gray-600 mt-1">No customers assigned — user will see nothing.</div>
                     )}
+                  </div>
+                )}
+
+                {u.role === "driver" && (
+                  <div className="mt-3 pt-3 border-t border-white/5">
+                    <label className="block text-xs text-gray-400 mb-1">Assigned vehicle</label>
+                    <input
+                      value={u.assigned_vehicle ?? ""}
+                      onChange={(e) => handleVehicleChange(u.id, e.target.value)}
+                      placeholder="e.g. D1MLC"
+                      className="px-2 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-gray-600 w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-600 mt-1">Must match the vehicle registration on runs exactly.</p>
                   </div>
                 )}
               </div>

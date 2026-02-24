@@ -1,10 +1,22 @@
 "use client";
 
+import { useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Navigation from "@/components/Navigation";
+import { useAuth } from "@/components/AuthProvider";
 
 export default function Home() {
+  const { profile, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && profile?.role === "driver") {
+      router.replace("/driver");
+    }
+  }, [loading, profile, router]);
+
   return (
     <div className="min-h-screen bg-black text-white">
       <Navigation />

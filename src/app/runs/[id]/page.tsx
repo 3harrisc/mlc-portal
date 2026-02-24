@@ -149,6 +149,16 @@ function SortableStopRow({ id, postcode, index }: { id: string; postcode: string
   );
 }
 
+/** Compare two progress states — returns true if anything meaningful changed */
+function progressChanged(a: ProgressState, b: ProgressState): boolean {
+  if (a.completedIdx.length !== b.completedIdx.length) return true;
+  if (a.completedIdx.some((v, i) => v !== b.completedIdx[i])) return true;
+  if (a.onSiteIdx !== b.onSiteIdx) return true;
+  if (a.onSiteSinceMs !== b.onSiteSinceMs) return true;
+  if (a.lastInside !== b.lastInside) return true;
+  return false;
+}
+
 export default function RunDetailPage() {
   const params = useParams();
   const runId = params?.id as string;
@@ -192,6 +202,9 @@ export default function RunDetailPage() {
   // Debounce timer for persisting progress to DB
   const progressSaveTimer = useRef<any>(null);
 
+  // Latest progress snapshot from DB (updated by periodic sync)
+  const dbProgressRef = useRef<ProgressState | null>(null);
+
   // Load run from Supabase
   useEffect(() => {
     if (!runId) return;
@@ -212,6 +225,50 @@ export default function RunDetailPage() {
         }
         setRunLoading(false);
       });
+  }, [runId]);
+
+  // Periodically sync progress from DB to pick up cron-written completions
+  useEffect(() => {
+    if (!runId) return;
+    const supabase = createClient();
+
+    const sync = async () => {
+      const { data } = await supabase
+        .from("runs")
+        .select("progress, completed_stop_indexes, completed_meta")
+        .eq("id", runId)
+        .single();
+      if (!data) return;
+
+      const dbProgress: ProgressState = data.progress ?? DEFAULT_PROGRESS;
+      dbProgressRef.current = dbProgress;
+
+      // Merge cron completions into local progress
+      const local = progressRef.current ?? DEFAULT_PROGRESS;
+      const merged = [...new Set([...local.completedIdx, ...dbProgress.completedIdx])].sort((a, b) => a - b);
+
+      if (merged.length > local.completedIdx.length) {
+        const updated: ProgressState = { ...local, completedIdx: merged };
+        setProgress(updated);
+        progressRef.current = updated;
+      }
+
+      // Sync completedStopIndexes and completedMeta from DB into run state
+      const dbStops: number[] = data.completed_stop_indexes ?? [];
+      const dbMeta = data.completed_meta ?? {};
+      setRun((prev) => {
+        if (!prev) return prev;
+        const localStops = prev.completedStopIndexes ?? [];
+        const mergedStops = [...new Set([...localStops, ...dbStops])].sort((a, b) => a - b);
+        if (mergedStops.length === localStops.length && JSON.stringify(dbMeta) === JSON.stringify(prev.completedMeta)) return prev;
+        return { ...prev, completedStopIndexes: mergedStops, completedMeta: { ...(prev.completedMeta ?? {}), ...dbMeta } };
+      });
+    };
+
+    // Run immediately, then every 60 seconds
+    sync();
+    const timer = setInterval(sync, 60_000);
+    return () => clearInterval(timer);
   }, [runId]);
 
   // Fetch customer open/close times from DB
@@ -451,8 +508,17 @@ export default function RunDetailPage() {
         setVehicleSnap(data);
 
         // ---- Progress engine ----
+        // Merge any cron-written completions into local progress before running
         const current = progressRef.current ?? DEFAULT_PROGRESS;
-        const p: ProgressState = { ...current, completedIdx: [...current.completedIdx] };
+        const dbSnap = dbProgressRef.current;
+        let mergedCompleted = [...current.completedIdx];
+        if (dbSnap) {
+          for (const idx of dbSnap.completedIdx ?? []) {
+            if (!mergedCompleted.includes(idx)) mergedCompleted.push(idx);
+          }
+          mergedCompleted.sort((a, b) => a - b);
+        }
+        const p: ProgressState = { ...current, completedIdx: mergedCompleted };
 
         const nsi = nextStopIndex(stops, p.completedIdx);
 
@@ -470,7 +536,7 @@ export default function RunDetailPage() {
               p.onSiteSinceMs = null;
             }
           }
-          saveProgress(p);
+          if (progressChanged(current, p)) saveProgress(p);
           setEtaText("Done");
           setEtaDetails(null);
           return;
@@ -532,7 +598,7 @@ export default function RunDetailPage() {
           }
         }
 
-        saveProgress(p);
+        if (progressChanged(current, p)) saveProgress(p);
 
         // ---- ETA engine (vehicle -> next not-completed stop) ----
         const nsi2 = nextStopIndex(stops, p.completedIdx);
@@ -621,15 +687,19 @@ export default function RunDetailPage() {
     saveProgress(p);
 
     // Also sync completed_stop_indexes + completed_meta so runs page shows COMPLETE
-    const newCompleted = [...(run.completedStopIndexes ?? [])];
-    if (!newCompleted.includes(idx)) {
-      newCompleted.push(idx);
-      newCompleted.sort((a, b) => a - b);
-    }
+    // Use functional setRun to avoid stale closure during rapid clicks
     const nowISO = new Date().toISOString();
-    const newMeta = { ...(run.completedMeta ?? {}), [idx]: { atISO: nowISO, by: "admin" as const } };
-    updateRunAction(run.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
-    setRun({ ...run, completedStopIndexes: newCompleted, completedMeta: newMeta });
+    setRun((prev) => {
+      if (!prev) return prev;
+      const newCompleted = [...(prev.completedStopIndexes ?? [])];
+      if (!newCompleted.includes(idx)) {
+        newCompleted.push(idx);
+        newCompleted.sort((a, b) => a - b);
+      }
+      const newMeta = { ...(prev.completedMeta ?? {}), [idx]: { atISO: nowISO, by: "admin" as const } };
+      updateRunAction(prev.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
+      return { ...prev, completedStopIndexes: newCompleted, completedMeta: newMeta };
+    });
   }
 
   function adminUndoCompleted(idx: number) {
@@ -639,11 +709,14 @@ export default function RunDetailPage() {
     saveProgress(p);
 
     // Also sync completed_stop_indexes + completed_meta
-    const newCompleted = (run.completedStopIndexes ?? []).filter((x) => x !== idx);
-    const newMeta = { ...(run.completedMeta ?? {}) };
-    delete newMeta[idx];
-    updateRunAction(run.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
-    setRun({ ...run, completedStopIndexes: newCompleted, completedMeta: newMeta });
+    setRun((prev) => {
+      if (!prev) return prev;
+      const newCompleted = (prev.completedStopIndexes ?? []).filter((x) => x !== idx);
+      const newMeta = { ...(prev.completedMeta ?? {}) };
+      delete newMeta[idx];
+      updateRunAction(prev.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
+      return { ...prev, completedStopIndexes: newCompleted, completedMeta: newMeta };
+    });
   }
 
   function adminResetProgress() {
@@ -655,7 +728,7 @@ export default function RunDetailPage() {
 
     // Also clear completed_stop_indexes + completed_meta
     updateRunAction(run.id, { completedStopIndexes: [], completedMeta: {} });
-    setRun({ ...run, completedStopIndexes: [], completedMeta: {} });
+    setRun((prev) => prev ? { ...prev, completedStopIndexes: [], completedMeta: {} } : prev);
   }
 
   async function handleDeleteRun() {

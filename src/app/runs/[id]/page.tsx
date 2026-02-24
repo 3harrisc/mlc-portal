@@ -619,6 +619,17 @@ export default function RunDetailPage() {
     }
 
     saveProgress(p);
+
+    // Also sync completed_stop_indexes + completed_meta so runs page shows COMPLETE
+    const newCompleted = [...(run.completedStopIndexes ?? [])];
+    if (!newCompleted.includes(idx)) {
+      newCompleted.push(idx);
+      newCompleted.sort((a, b) => a - b);
+    }
+    const nowISO = new Date().toISOString();
+    const newMeta = { ...(run.completedMeta ?? {}), [idx]: { atISO: nowISO, by: "admin" as const } };
+    updateRunAction(run.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
+    setRun({ ...run, completedStopIndexes: newCompleted, completedMeta: newMeta });
   }
 
   function adminUndoCompleted(idx: number) {
@@ -626,6 +637,13 @@ export default function RunDetailPage() {
     const current = progressRef.current ?? DEFAULT_PROGRESS;
     const p: ProgressState = { ...current, completedIdx: current.completedIdx.filter((x) => x !== idx) };
     saveProgress(p);
+
+    // Also sync completed_stop_indexes + completed_meta
+    const newCompleted = (run.completedStopIndexes ?? []).filter((x) => x !== idx);
+    const newMeta = { ...(run.completedMeta ?? {}) };
+    delete newMeta[idx];
+    updateRunAction(run.id, { completedStopIndexes: newCompleted, completedMeta: newMeta });
+    setRun({ ...run, completedStopIndexes: newCompleted, completedMeta: newMeta });
   }
 
   function adminResetProgress() {
@@ -634,6 +652,10 @@ export default function RunDetailPage() {
     saveProgress(p);
     setEtaText("—");
     setEtaDetails(null);
+
+    // Also clear completed_stop_indexes + completed_meta
+    updateRunAction(run.id, { completedStopIndexes: [], completedMeta: {} });
+    setRun({ ...run, completedStopIndexes: [], completedMeta: {} });
   }
 
   async function handleDeleteRun() {
@@ -751,6 +773,71 @@ export default function RunDetailPage() {
     setNewDropPC("");
     setNewDropPos(-1);
     setAddingDrop(false);
+  }
+
+  async function handleRemoveDrop(removeIdx: number) {
+    if (!run || !isAdmin) return;
+    if (!confirm(`Remove stop ${removeIdx + 1} (${stops[removeIdx]}) from this run?`)) return;
+
+    const currentStops = [...stops];
+    currentStops.splice(removeIdx, 1);
+    const newRawText = currentStops.join("\n");
+
+    // Shift all index-based tracking data: indexes above removeIdx shift down by 1
+    const unshiftIdx = (idx: number) => idx > removeIdx ? idx - 1 : idx;
+
+    const current = progressRef.current ?? DEFAULT_PROGRESS;
+
+    // Remove the deleted index from completedIdx, then shift remaining down
+    const newCompletedIdx = current.completedIdx
+      .filter((x) => x !== removeIdx)
+      .map(unshiftIdx)
+      .sort((a, b) => a - b);
+
+    let newOnSiteIdx = current.onSiteIdx;
+    if (newOnSiteIdx === removeIdx) {
+      newOnSiteIdx = null;
+    } else if (newOnSiteIdx != null && newOnSiteIdx > removeIdx) {
+      newOnSiteIdx = newOnSiteIdx - 1;
+    }
+
+    const newProgress: ProgressState = {
+      ...current,
+      completedIdx: newCompletedIdx,
+      onSiteIdx: newOnSiteIdx,
+      onSiteSinceMs: newOnSiteIdx === null ? null : current.onSiteSinceMs,
+      lastInside: newOnSiteIdx === null ? false : current.lastInside,
+    };
+
+    const existingCompleted = (run.completedStopIndexes ?? [])
+      .filter((x) => x !== removeIdx)
+      .map(unshiftIdx)
+      .sort((a, b) => a - b);
+
+    const existingMeta = run.completedMeta ?? {};
+    const newMeta: Record<number, any> = {};
+    for (const [k, v] of Object.entries(existingMeta)) {
+      const oldIdx = Number(k);
+      if (oldIdx === removeIdx) continue;
+      newMeta[unshiftIdx(oldIdx)] = v;
+    }
+
+    await updateRunAction(run.id, {
+      rawText: newRawText,
+      progress: newProgress,
+      completedStopIndexes: existingCompleted,
+      completedMeta: newMeta,
+    });
+
+    setRun({
+      ...run,
+      rawText: newRawText,
+      progress: newProgress,
+      completedStopIndexes: existingCompleted,
+      completedMeta: newMeta,
+    });
+    setProgress(newProgress);
+    progressRef.current = newProgress;
   }
 
   function handleStartEditOrder() {
@@ -1201,6 +1288,12 @@ export default function RunDetailPage() {
                               Undo
                             </button>
                           )}
+                          <button
+                            onClick={() => handleRemoveDrop(idx)}
+                            className="px-3 py-2 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-400 text-sm"
+                          >
+                            Remove
+                          </button>
                         </>
                       )}
                     </div>

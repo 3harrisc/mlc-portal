@@ -47,6 +47,7 @@ function runMatchesSearch(r: PlannedRun, q: string) {
   if (!query) return true;
   if (norm(r.jobNumber).includes(query)) return true;
   if (norm(r.loadRef || "").includes(query)) return true;
+  if (norm(r.customer).includes(query)) return true;
   if (norm(r.vehicle).includes(query)) return true;
   if (norm(r.fromPostcode).includes(query)) return true;
   if (norm(r.toPostcode || "").includes(query)) return true;
@@ -70,6 +71,7 @@ function SortableRunCard({
   nicknames,
   chainedStartTime,
   onDelete,
+  showDate,
 }: {
   run: PlannedRun;
   index: number;
@@ -78,6 +80,7 @@ function SortableRunCard({
   nicknames: Record<string, string>;
   chainedStartTime?: string;
   onDelete: (id: string) => void;
+  showDate?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: run.id });
@@ -119,7 +122,7 @@ function SortableRunCard({
         </div>
         <div className="min-w-0">
           <div className="font-semibold text-lg">
-            {run.jobNumber} • {run.customer}
+            {run.jobNumber} • {showDate ? `${run.date} • ` : ""}{run.customer}
             {run.runType === "backload" && (
               <span className="ml-2 text-purple-400 text-sm font-semibold">BACKLOAD</span>
             )}
@@ -169,12 +172,14 @@ function RunCard({
   nicknames,
   onDelete,
   variant = "default",
+  showDate,
 }: {
   run: PlannedRun;
   isAdmin: boolean;
   nicknames: Record<string, string>;
   onDelete: (id: string) => void;
   variant?: "default" | "carryover";
+  showDate?: boolean;
 }) {
   const complete = isRunComplete(run);
   const stops = parseStops(run.rawText);
@@ -195,7 +200,7 @@ function RunCard({
     <div className={`border rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap ${borderClass}`}>
       <div className="min-w-0">
         <div className="font-semibold text-lg">
-          {run.jobNumber} • {variant === "carryover" ? `${run.date} • ` : ""}{run.customer}
+          {run.jobNumber} • {variant === "carryover" || showDate ? `${run.date} • ` : ""}{run.customer}
           {run.runType === "backload" && (
             <span className="ml-2 text-purple-400 text-sm font-semibold">BACKLOAD</span>
           )}
@@ -282,26 +287,28 @@ export default function RunsPage() {
     return d.toISOString().slice(0, 10);
   }, [date]);
 
+  // When searching, skip the date filter so results span all dates
+  const isSearching = search.trim().length > 0;
+
   const filtered = useMemo(() => {
     return runs
       .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
-      .filter((r) => (date ? r.date === date : true))
+      .filter((r) => isSearching ? true : (date ? r.date === date : true))
       .filter((r) => (customer === "All" ? true : r.customer === customer))
       .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))
       .filter((r) => runMatchesSearch(r, search))
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [runs, date, customer, vehicle, search, isAdmin, allowedCustomers]);
+  }, [runs, date, customer, vehicle, search, isSearching, isAdmin, allowedCustomers]);
 
   const carryOver = useMemo(() => {
-    if (!date || !prevDate) return [];
+    if (isSearching || !date || !prevDate) return [];
     return runs
       .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
       .filter((r) => r.date === prevDate)
       .filter((r) => !isRunComplete(r) && parseStops(r.rawText).length > 0)
       .filter((r) => (customer === "All" ? true : r.customer === customer))
-      .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))
-      .filter((r) => runMatchesSearch(r, search));
-  }, [runs, date, prevDate, customer, vehicle, search, isAdmin, allowedCustomers]);
+      .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true));
+  }, [runs, date, prevDate, customer, vehicle, isSearching, isAdmin, allowedCustomers]);
 
   const unassignedCount = useMemo(
     () => filtered.filter((r) => !r.vehicle?.trim()).length,
@@ -530,6 +537,7 @@ export default function RunsPage() {
                               nicknames={nicknames}
                               chainedStartTime={chainedStarts.get(r.id)?.chainedStartTime}
                               onDelete={handleDelete}
+                              showDate={isSearching}
                             />
                           ))}
                         </div>
@@ -546,6 +554,7 @@ export default function RunsPage() {
                           isAdmin={isAdmin}
                           nicknames={nicknames}
                           onDelete={handleDelete}
+                          showDate={isSearching}
                         />
                       ))}
                     </div>
@@ -561,7 +570,7 @@ export default function RunsPage() {
                   </div>
                   <div className="space-y-2">
                     {vehicleGroups.unassigned.map((r) => (
-                      <RunCard key={r.id} run={r} isAdmin={isAdmin} nicknames={nicknames} onDelete={handleDelete} />
+                      <RunCard key={r.id} run={r} isAdmin={isAdmin} nicknames={nicknames} onDelete={handleDelete} showDate={isSearching} />
                     ))}
                   </div>
                 </div>
@@ -569,7 +578,7 @@ export default function RunsPage() {
 
               {/* Flat list fallback when no date filter */}
               {!vehicleGroups && filtered.map((r) => (
-                <RunCard key={r.id} run={r} isAdmin={isAdmin} nicknames={nicknames} onDelete={handleDelete} />
+                <RunCard key={r.id} run={r} isAdmin={isAdmin} nicknames={nicknames} onDelete={handleDelete} showDate={isSearching} />
               ))}
             </>
           )}

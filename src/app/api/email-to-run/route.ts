@@ -70,6 +70,7 @@ type ParsedEmail = {
   vehicle: string;
   loadRef: string;
   collectionRef: string;
+  collectionTime: string;
   fromPostcode: string;
   notes: string;
 };
@@ -114,6 +115,7 @@ Extract these fields and return ONLY valid JSON (no markdown, no code fences):
   "vehicle": "vehicle registration if mentioned, or empty string",
   "loadRef": "any overall booking/load/order reference number, or empty string",
   "collectionRef": "collection or pickup reference/booking number, or empty string",
+  "collectionTime": "collection/pickup time in HH:MM 24hr format, or empty string",
   "fromPostcode": "collection/base postcode if mentioned, or empty string",
   "notes": "any special instructions or notes, or empty string"
 }
@@ -127,6 +129,7 @@ IMPORTANT RULES:
 - If you can't determine a field, use empty string or null as appropriate
 - Check BOTH the email body AND any attached PDF documents for delivery information
 - "collectionRef" is a reference number for the collection/pickup (e.g. booking ref, collection number)
+- "collectionTime" is when the collection/pickup is booked for (e.g. "08:00", "14:30")
 - "loadRef" is the overall load or order reference number
 - Each postcode's "ref" is a per-delivery reference number (e.g. delivery note number, consignment number, DN ref)
 - Look for ANY reference numbers, booking numbers, order numbers, consignment numbers, DN numbers etc.
@@ -249,11 +252,11 @@ export async function POST(req: Request) {
       });
     }
 
-    // 5. Validate & resolve customer
+    // 5. Validate & resolve customer (use parsed name even if not in system)
     const matchedCustomer = customerNames.find(
       (c: string) => c.toLowerCase() === (parsed.customer || "").toLowerCase()
     );
-    const customerName = matchedCustomer || customerNames[0] || "Unknown";
+    const customerName = matchedCustomer || parsed.customer || "Unknown";
     const customerData = customerMap.get(customerName.toLowerCase());
     const basePostcode = customerData?.base_postcode || "GL2 7ND";
 
@@ -290,7 +293,7 @@ export async function POST(req: Request) {
     // 8. Get job number
     const jobNumber = await getNextJobNumber(runDate);
 
-    // 9. Build and insert run
+    // 9. Build and insert run (as backload)
     const fromPc = parsed.fromPostcode
       ? normalizePostcode(parsed.fromPostcode)
       : normalizePostcode(basePostcode);
@@ -298,6 +301,11 @@ export async function POST(req: Request) {
     // Combine collection ref and load ref
     const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
     const combinedRef = refs.join(" / ") || "";
+
+    // Use collection time or earliest delivery time as start time
+    const collectionTime = parsed.collectionTime || "";
+    const firstDeliveryTime = (parsed.postcodes || []).find((p: any) => p.time)?.time;
+    const startTime = collectionTime || firstDeliveryTime || "08:00";
 
     const run: PlannedRun = {
       id: crypto.randomUUID(),
@@ -308,16 +316,17 @@ export async function POST(req: Request) {
       vehicle: parsed.vehicle || "",
       fromPostcode: fromPc,
       toPostcode: fromPc,
-      returnToBase: true,
-      startTime: "08:00",
+      returnToBase: false,
+      startTime,
       serviceMins: 25,
       includeBreaks: true,
       rawText: postcodeLines.join("\n"),
       completedStopIndexes: [],
       completedMeta: {},
       progress: DEFAULT_PROGRESS,
-      runType: "regular",
+      runType: "backload",
       runOrder: null,
+      collectionTime: collectionTime || undefined,
     };
 
     const { error: insertErr } = await sb

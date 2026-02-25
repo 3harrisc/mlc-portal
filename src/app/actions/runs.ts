@@ -32,6 +32,9 @@ export async function updateRun(
     progress: ProgressState;
     completedStopIndexes: number[];
     completedMeta: Record<number, { atISO?: string; by: "auto" | "admin" | "driver"; arrivedISO?: string }>;
+    runType: string;
+    runOrder: number | null;
+    collectionTime: string | null;
   }>
 ) {
   const { supabase } = await getUser();
@@ -44,9 +47,28 @@ export async function updateRun(
   if (fields.progress !== undefined) row.progress = fields.progress;
   if (fields.completedStopIndexes !== undefined) row.completed_stop_indexes = fields.completedStopIndexes;
   if (fields.completedMeta !== undefined) row.completed_meta = fields.completedMeta;
+  if (fields.runType !== undefined) row.run_type = fields.runType;
+  if (fields.runOrder !== undefined) row.run_order = fields.runOrder;
+  if (fields.collectionTime !== undefined) row.collection_time = fields.collectionTime;
 
   const { error } = await supabase.from("runs").update(row).eq("id", id);
   if (error) return { error: error.message };
+  return { success: true };
+}
+
+/** Bulk-update run_order for a set of runs (reordering within vehicle+date) */
+export async function updateRunOrders(
+  orders: Array<{ id: string; runOrder: number }>
+) {
+  const { supabase } = await getUser();
+
+  const promises = orders.map(({ id, runOrder }) =>
+    supabase.from("runs").update({ run_order: runOrder }).eq("id", id)
+  );
+
+  const results = await Promise.all(promises);
+  const firstError = results.find((r) => r.error);
+  if (firstError?.error) return { error: firstError.error.message };
   return { success: true };
 }
 

@@ -1032,6 +1032,9 @@ export default function RunDetailPage() {
 
         <h1 className="text-3xl font-bold mt-6">
           {run.date} • {run.customer}
+          {run.runType === "backload" && (
+            <span className="ml-3 text-purple-400 text-base font-semibold">BACKLOAD</span>
+          )}
           {run.vehicle?.trim() ? (
             <span className="ml-3 text-gray-300 text-base font-semibold">{run.vehicle}</span>
           ) : (
@@ -1060,13 +1063,23 @@ export default function RunDetailPage() {
         </div>
 
         <div className="text-sm text-gray-400 mt-2">
-          From {withNickname(normalizePostcode(run.fromPostcode), nicknames)} •{" "}
-          {run.returnToBase ? (
-            <>Return to base</>
+          {run.runType === "backload" ? (
+            <>
+              Collection: <span className="text-gray-200 font-semibold">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span>
+              {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
+              {" "}• End at last delivery
+            </>
           ) : (
             <>
-              To{" "}
-              <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
+              From {withNickname(normalizePostcode(run.fromPostcode), nicknames)} •{" "}
+              {run.returnToBase ? (
+                <>Return to base</>
+              ) : (
+                <>
+                  To{" "}
+                  <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
+                </>
+              )}
             </>
           )}{" "}
           • Start {run.startTime} • Breaks {run.includeBreaks ? "On" : "Off"}

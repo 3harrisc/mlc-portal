@@ -166,6 +166,8 @@ export default function TemplatesPage() {
         serviceMins: tpl.serviceMins,
         includeBreaks: tpl.includeBreaks,
         rawText: tpl.rawText,
+        runType: "regular",
+        runOrder: null,
       });
     }
 

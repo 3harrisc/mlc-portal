@@ -8,6 +8,8 @@ export type Customer = {
   close_time: string;
 };
 
+export type RunType = "regular" | "backload";
+
 export type PlannedRun = {
   id: string;
   jobNumber: string;
@@ -26,6 +28,9 @@ export type PlannedRun = {
   completedMeta?: Record<number, { atISO?: string; by: "auto" | "admin" | "driver"; arrivedISO?: string }>;
   progress?: ProgressState;
   createdBy?: string;
+  runType: RunType;
+  runOrder: number | null;
+  collectionTime?: string; // HH:MM booking time at collection (backloads)
 };
 
 export type ProgressState = {
@@ -78,6 +83,9 @@ export function rowToRun(row: any): PlannedRun {
     completedMeta: row.completed_meta ?? {},
     progress: row.progress ?? { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false },
     createdBy: row.created_by ?? undefined,
+    runType: row.run_type ?? "regular",
+    runOrder: row.run_order ?? null,
+    collectionTime: row.collection_time ?? undefined,
   };
 }
 
@@ -101,6 +109,9 @@ export function runToRow(run: PlannedRun, userId?: string) {
     completed_meta: run.completedMeta ?? {},
     progress: run.progress ?? { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false },
     created_by: userId ?? null,
+    run_type: run.runType ?? "regular",
+    run_order: run.runOrder ?? null,
+    collection_time: run.collectionTime ?? null,
   };
 }
 

@@ -22,7 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { createRuns as createRunsAction, nextJobNumber } from "@/app/actions/runs";
 import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplateAction } from "@/app/actions/templates";
-import type { PlannedRun, CustomerKey, RouteTemplate } from "@/types/runs";
+import type { PlannedRun, CustomerKey, RouteTemplate, RunType } from "@/types/runs";
 import { rowToRun, rowToTemplate } from "@/types/runs";
 import { HGV_TIME_MULTIPLIER, MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS, DEFAULT_SERVICE_MINS, DEFAULT_START_TIME } from "@/lib/constants";
 import { fetchCustomers, DEFAULT_BASE } from "@/lib/customers";
@@ -271,9 +271,15 @@ export default function PlanRoutePage() {
     return `${yyyy}-${mm}-${dd}`;
   });
 
+  const [routeType, setRouteType] = useState<RunType>("regular");
+
   const [fromPostcode, setFromPostcode] = useState<string>(DEFAULT_BASE);
   const [toPostcode, setToPostcode] = useState<string>(DEFAULT_BASE);
   const [returnToBase, setReturnToBase] = useState<boolean>(true);
+
+  // Backload-specific
+  const [collectFromPostcode, setCollectFromPostcode] = useState<string>("");
+  const [collectionTime, setCollectionTime] = useState<string>("");
 
   const [vehicle, setVehicle] = useState<string>("");
   const [loadRef, setLoadRef] = useState<string>("");
@@ -603,6 +609,77 @@ export default function PlanRoutePage() {
     }
   }
 
+  // Backload routing: collection → deliveries (no return)
+  async function routeBackload() {
+    setRouteError("");
+    setScheduleRows([]);
+    setLegRows([]);
+
+    if (!collectFromPostcode.trim()) {
+      setRouteError("Enter a collection postcode.");
+      return;
+    }
+    if (!stops.length) {
+      setRouteError("No delivery stops. Paste postcodes then click Preview list.");
+      return;
+    }
+
+    const from = normalizePostcode(collectFromPostcode);
+    const pcs = [from, ...stops.map((s) => s.postcode)];
+
+    let coords: Record<string, LngLat>;
+    try {
+      coords = await ensureCoords(pcs);
+    } catch (e: any) {
+      setRouteError(e?.message || "Geocoding failed");
+      return;
+    }
+
+    try {
+      const routePoints: LngLat[] = [coords[from], ...stops.map((s) => coords[s.postcode])];
+      const dirs = await getDirections(routePoints, mapboxToken);
+
+      const stopLegMins = dirs.legMins.slice(0, stops.length);
+      const effectiveStart = collectionTime || startTime;
+      const sched = buildSchedule(effectiveStart, stops, stopLegMins, serviceMins, includeBreaks, `collection (${from})`);
+      setScheduleRows(sched);
+
+      const legs: LegRow[] = [];
+      for (let i = 0; i < dirs.legMins.length; i++) {
+        const fromLabel = i === 0 ? `Collection (${from})` : `Delivery ${i}`;
+        const toLabel = `Delivery ${i + 1}`;
+        legs.push({
+          label: `${fromLabel} → ${toLabel}`,
+          mins: dirs.legMins[i],
+          km: Math.round(dirs.legKm[i] * 10) / 10,
+        });
+      }
+      setLegRows(legs);
+
+      if (dirs.geometry && mapRef.current && mapMode !== "pins") {
+        const map = mapRef.current;
+        try {
+          if (map.getLayer("mlc-route-line")) map.removeLayer("mlc-route-line");
+          if (map.getSource("mlc-route")) map.removeSource("mlc-route");
+        } catch { /* ignore */ }
+
+        map.addSource("mlc-route", {
+          type: "geojson",
+          data: { type: "Feature", properties: {}, geometry: dirs.geometry },
+        });
+        map.addLayer({
+          id: "mlc-route-line",
+          type: "line",
+          source: "mlc-route",
+          paint: { "line-width": 4, "line-opacity": 0.85 },
+        });
+        routeSourceReadyRef.current = true;
+      }
+    } catch (e: any) {
+      setRouteError(e?.message || "Schedule/legs build failed");
+    }
+  }
+
   // Templates / runs actions
   async function saveTemplate() {
     const name = templateName.trim();
@@ -659,6 +736,10 @@ export default function PlanRoutePage() {
       setRouteError("Paste your postcodes first.");
       return;
     }
+    if (routeType === "backload" && !collectFromPostcode.trim()) {
+      setRouteError("Enter a collection postcode for the backload.");
+      return;
+    }
 
     setSaveMessage("");
     setSaving(true);
@@ -683,6 +764,10 @@ export default function PlanRoutePage() {
         : (normalizePostcode(toPostcode || "") || "");
 
     // Get job numbers from server (atomic)
+    const isBackload = routeType === "backload";
+    const effectiveFrom = isBackload ? normalizePostcode(collectFromPostcode) : from;
+    const effectiveTo = isBackload ? "" : to;
+
     const newRuns: PlannedRun[] = [];
     for (const d of dates) {
       const { jobNumber: jn } = await nextJobNumber(d);
@@ -693,15 +778,18 @@ export default function PlanRoutePage() {
         date: d,
         customer,
         vehicle,
-        fromPostcode: from,
-        toPostcode: to,
-        returnToBase,
+        fromPostcode: effectiveFrom,
+        toPostcode: effectiveTo,
+        returnToBase: isBackload ? false : returnToBase,
         startTime,
         serviceMins,
         includeBreaks,
         rawText,
         completedStopIndexes: [],
         completedMeta: {},
+        runType: routeType,
+        runOrder: null,
+        collectionTime: isBackload && collectionTime ? collectionTime : undefined,
       });
     }
 
@@ -927,8 +1015,33 @@ export default function PlanRoutePage() {
     <div className="min-h-screen bg-black text-white">
       <Navigation />
       <div className="max-w-6xl mx-auto p-8">
-        <h1 className="text-3xl font-bold mb-6">Plan Route</h1>
+        <h1 className="text-3xl font-bold mb-4">Plan Route</h1>
 
+        {/* Route type tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setRouteType("regular")}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
+              routeType === "regular"
+                ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+                : "border border-white/15 text-gray-400 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Regular Route
+          </button>
+          <button
+            onClick={() => setRouteType("backload")}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${
+              routeType === "backload"
+                ? "bg-purple-600 text-white shadow-md shadow-purple-600/20"
+                : "border border-white/15 text-gray-400 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Backload
+          </button>
+        </div>
+
+        {/* Shared fields: date, customer, vehicle, load ref */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-semibold mb-2">Date</label>
@@ -937,10 +1050,10 @@ export default function PlanRoutePage() {
 
           <div>
             <label className="block text-sm font-semibold mb-2">Customer</label>
-            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const cObj = allCustomers.find((x) => x.name === c); if (cObj?.base_postcode) setFromPostcode(cObj.base_postcode); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
+            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const cObj = allCustomers.find((x) => x.name === c); if (cObj?.base_postcode && routeType === "regular") setFromPostcode(cObj.base_postcode); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
               {customerOptions.map((c) => (<option key={c} value={c} className="bg-black">{c}</option>))}
             </select>
-            <div className="text-xs text-gray-400 mt-2">Customer controls who can view later. Routing uses From/To.</div>
+            <div className="text-xs text-gray-400 mt-2">Customer controls who can view later.</div>
           </div>
 
           <div>
@@ -956,60 +1069,113 @@ export default function PlanRoutePage() {
           </div>
 
           <div>
-            <label className="block text-sm font-semibold mb-2">Start time</label>
+            <label className="block text-sm font-semibold mb-2">{routeType === "backload" ? "Departure time" : "Start time"}</label>
             <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
-          <div>
-            <label className="block text-sm font-semibold mb-2">From (routing only)</label>
-            <input value={fromPostcode} onChange={(e) => setFromPostcode(normalizePostcode(e.target.value))} placeholder="e.g. GL2 7ND" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
-            <div className="text-xs text-gray-400 mt-2">Default base is GL2 7ND (Montpellier).</div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-semibold mb-2">To (routing only)</label>
-            <input value={toPostcode} onChange={(e) => setToPostcode(normalizePostcode(e.target.value))} disabled={returnToBase} placeholder="Leave blank to finish at last drop" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent disabled:opacity-50" />
-            <div className="mt-2 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={returnToBase} onChange={(e) => setReturnToBase(e.target.checked)} />
-              <span>Return to base</span>
+        {/* Regular route fields */}
+        {routeType === "regular" && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-semibold mb-2">From (routing only)</label>
+              <input value={fromPostcode} onChange={(e) => setFromPostcode(normalizePostcode(e.target.value))} placeholder="e.g. GL2 7ND" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="text-xs text-gray-400 mt-2">Default base is GL2 7ND (Montpellier).</div>
             </div>
-            {!returnToBase && !normalizePostcode(toPostcode || "") && (
-              <div className="text-xs text-emerald-300 mt-2">End = last drop (no return leg)</div>
-            )}
-          </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">Default service time (mins)</label>
-            <input type="number" value={serviceMins} min={0} onChange={(e) => setServiceMins(Number(e.target.value || 0))} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
-            <div className="mt-3 flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={includeBreaks} onChange={(e) => setIncludeBreaks(e.target.checked)} />
-              <span>Include 45-min breaks (after 4h30 driving)</span>
+            <div>
+              <label className="block text-sm font-semibold mb-2">To (routing only)</label>
+              <input value={toPostcode} onChange={(e) => setToPostcode(normalizePostcode(e.target.value))} disabled={returnToBase} placeholder="Leave blank to finish at last drop" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent disabled:opacity-50" />
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={returnToBase} onChange={(e) => setReturnToBase(e.target.checked)} />
+                <span>Return to base</span>
+              </div>
+              {!returnToBase && !normalizePostcode(toPostcode || "") && (
+                <div className="text-xs text-emerald-300 mt-2">End = last drop (no return leg)</div>
+              )}
             </div>
-            <div className="text-xs text-gray-400 mt-2">Service time is used for the on-site blocks in the schedule.</div>
-          </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">Default opening (by customer)</label>
-            <div className="w-full border border-white/15 rounded-lg px-3 py-2 bg-white/5">{opening.open}–{opening.close}</div>
-            <div className="text-xs text-gray-400 mt-2">Applied to newly parsed stops automatically.</div>
+            <div>
+              <label className="block text-sm font-semibold mb-2">Default service time (mins)</label>
+              <input type="number" value={serviceMins} min={0} onChange={(e) => setServiceMins(Number(e.target.value || 0))} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={includeBreaks} onChange={(e) => setIncludeBreaks(e.target.checked)} />
+                <span>Include 45-min breaks (after 4h30 driving)</span>
+              </div>
+              <div className="text-xs text-gray-400 mt-2">Service time is used for the on-site blocks in the schedule.</div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-2">Default opening (by customer)</label>
+              <div className="w-full border border-white/15 rounded-lg px-3 py-2 bg-white/5">{opening.open}–{opening.close}</div>
+              <div className="text-xs text-gray-400 mt-2">Applied to newly parsed stops automatically.</div>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Backload fields */}
+        {routeType === "backload" && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-semibold mb-2">Collect from</label>
+              <input value={collectFromPostcode} onChange={(e) => setCollectFromPostcode(e.target.value)} placeholder="e.g. B1 1BB" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="text-xs text-gray-400 mt-2">Collection postcode. This is the route start point.</div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-2">Collection booking time (optional)</label>
+              <input type="time" value={collectionTime} onChange={(e) => setCollectionTime(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="text-xs text-gray-400 mt-2">If the collection has a booked time slot.</div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-2">Default service time (mins)</label>
+              <input type="number" value={serviceMins} min={0} onChange={(e) => setServiceMins(Number(e.target.value || 0))} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={includeBreaks} onChange={(e) => setIncludeBreaks(e.target.checked)} />
+                <span>Include 45-min breaks (after 4h30 driving)</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-2">Default opening (by customer)</label>
+              <div className="w-full border border-white/15 rounded-lg px-3 py-2 bg-white/5">{opening.open}–{opening.close}</div>
+              <div className="text-xs text-gray-400 mt-2">Applied to newly parsed stops automatically.</div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-6">
-          <label className="block mb-2 font-semibold">Paste postcodes (one per line). Optional time after postcode (e.g. LS9 0AB 14:00)</label>
+          <label className="block mb-2 font-semibold">
+            {routeType === "backload"
+              ? "Delivery postcodes (one per line). Optional time after postcode (e.g. LS9 0AB 14:00)"
+              : "Paste postcodes (one per line). Optional time after postcode (e.g. LS9 0AB 14:00)"}
+          </label>
           <textarea value={rawText} onChange={(e) => setRawText(e.target.value)} className="w-full h-40 p-4 border border-white/15 rounded-xl bg-transparent" placeholder={`LS9 0AB 14:00\nM1 2XX\nDN2 4PG 11:30`} />
         </div>
 
         <div className="flex flex-wrap gap-3 mt-4">
           <button onClick={parseStopsFromText} className="px-5 py-2 rounded-lg border border-white/15 hover:bg-white/10">Preview list</button>
-          <button onClick={routeRespectBookings} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">Route (respect booking times)</button>
+          <button
+            onClick={routeType === "backload" ? routeBackload : routeRespectBookings}
+            className={`px-5 py-2 rounded-lg ${routeType === "backload" ? "bg-purple-600 hover:bg-purple-500" : "bg-blue-600 hover:bg-blue-500"}`}
+          >
+            {routeType === "backload" ? "Calculate ETAs" : "Route (respect booking times)"}
+          </button>
           <button onClick={() => { setStops([]); setScheduleRows([]); setLegRows([]); setRouteError(""); setRawText(""); }} className="px-5 py-2 rounded-lg border border-white/15 hover:bg-white/10">Clear stops</button>
           <div className="text-xs text-gray-400 flex items-center">
-            From: <span className="mx-2 text-white/80">{normalizePostcode(fromPostcode)}</span> • To:{" "}
-            <span className="mx-2 text-white/80">{returnToBase ? normalizePostcode(fromPostcode) : (normalizePostcode(toPostcode || "") || "(last drop)")}</span>{" "}
-            • Customer: <span className="mx-2 text-white/80">{customer}</span> • Date: <span className="mx-2 text-white/80">{date}</span>
+            {routeType === "backload" ? (
+              <>
+                Collection: <span className="mx-2 text-white/80">{normalizePostcode(collectFromPostcode) || "(not set)"}</span>
+                {collectionTime && <> • Booking: <span className="text-white/80">{collectionTime}</span></>}
+              </>
+            ) : (
+              <>
+                From: <span className="mx-2 text-white/80">{normalizePostcode(fromPostcode)}</span> • To:{" "}
+                <span className="mx-2 text-white/80">{returnToBase ? normalizePostcode(fromPostcode) : (normalizePostcode(toPostcode || "") || "(last drop)")}</span>
+              </>
+            )}
+            {" "}• Customer: <span className="mx-2 text-white/80">{customer}</span> • Date: <span className="mx-2 text-white/80">{date}</span>
           </div>
         </div>
 
@@ -1086,8 +1252,12 @@ export default function PlanRoutePage() {
 
         <div className="mt-8 border border-white/10 rounded-2xl p-6 bg-white/5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold">Stops (drag to reorder)</h2>
-            <div className="text-sm text-gray-400">Booking-time stops are kept in time order when routing. You can still override.</div>
+            <h2 className="text-2xl font-bold">{routeType === "backload" ? "Deliveries" : "Stops"} (drag to reorder)</h2>
+            <div className="text-sm text-gray-400">
+              {routeType === "backload"
+                ? "Delivery order as pasted. Drag to reorder if needed."
+                : "Booking-time stops are kept in time order when routing. You can still override."}
+            </div>
           </div>
 
           {stops.length === 0 ? (

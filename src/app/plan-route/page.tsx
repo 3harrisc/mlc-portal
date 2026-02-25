@@ -22,6 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { createRuns as createRunsAction, nextJobNumber } from "@/app/actions/runs";
 import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplateAction } from "@/app/actions/templates";
+import { createCustomer as createCustomerAction } from "@/app/admin/customers/actions";
 import type { PlannedRun, CustomerKey, RouteTemplate, RunType } from "@/types/runs";
 import { rowToRun, rowToTemplate } from "@/types/runs";
 import { HGV_TIME_MULTIPLIER, MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS, DEFAULT_SERVICE_MINS, DEFAULT_START_TIME } from "@/lib/constants";
@@ -263,6 +264,10 @@ export default function PlanRoutePage() {
 
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [customer, setCustomer] = useState<CustomerKey>("Montpellier");
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustName, setNewCustName] = useState("");
+  const [newCustPostcode, setNewCustPostcode] = useState("");
+  const [newCustSaving, setNewCustSaving] = useState(false);
   const [date, setDate] = useState<string>(() => {
     const d = new Date();
     const yyyy = d.getFullYear();
@@ -1050,10 +1055,40 @@ export default function PlanRoutePage() {
 
           <div>
             <label className="block text-sm font-semibold mb-2">Customer</label>
-            <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const cObj = allCustomers.find((x) => x.name === c); if (cObj?.base_postcode && routeType === "regular") setFromPostcode(cObj.base_postcode); }} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent">
-              {customerOptions.map((c) => (<option key={c} value={c} className="bg-black">{c}</option>))}
-            </select>
-            <div className="text-xs text-gray-400 mt-2">Customer controls who can view later.</div>
+            <div className="flex gap-2">
+              <select value={customer} onChange={(e) => { const c = e.target.value as CustomerKey; setCustomer(c); const cObj = allCustomers.find((x) => x.name === c); if (cObj?.base_postcode && routeType === "regular") setFromPostcode(cObj.base_postcode); }} className="flex-1 border border-white/15 rounded-lg px-3 py-2 bg-transparent">
+                {customerOptions.map((c) => (<option key={c} value={c} className="bg-black">{c}</option>))}
+              </select>
+              <button type="button" onClick={() => setShowNewCustomer(!showNewCustomer)} className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${showNewCustomer ? "border-blue-400/30 text-blue-400 bg-blue-400/10" : "border-white/15 hover:bg-white/10"}`}>
+                + New
+              </button>
+            </div>
+            {showNewCustomer && (
+              <div className="mt-2 border border-white/10 rounded-lg p-3 bg-white/5 space-y-2">
+                <input value={newCustName} onChange={(e) => setNewCustName(e.target.value)} placeholder="Customer name" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm" />
+                <input value={newCustPostcode} onChange={(e) => setNewCustPostcode(e.target.value)} placeholder="Base postcode (optional)" className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm" />
+                <button
+                  type="button"
+                  disabled={!newCustName.trim() || newCustSaving}
+                  onClick={async () => {
+                    setNewCustSaving(true);
+                    const res = await createCustomerAction(newCustName.trim(), newCustPostcode.trim() || DEFAULT_BASE, "06:00", "18:00");
+                    setNewCustSaving(false);
+                    if (res.success) {
+                      const updated = await fetchCustomers();
+                      setAllCustomers(updated);
+                      setCustomer(newCustName.trim() as CustomerKey);
+                      setNewCustName("");
+                      setNewCustPostcode("");
+                      setShowNewCustomer(false);
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium disabled:opacity-50 transition-colors"
+                >
+                  {newCustSaving ? "Saving..." : "Add Customer"}
+                </button>
+              </div>
+            )}
           </div>
 
           <div>
@@ -1068,10 +1103,12 @@ export default function PlanRoutePage() {
             <div className="text-xs text-gray-500 mt-2">Customer or internal reference for this load.</div>
           </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">{routeType === "backload" ? "Departure time" : "Start time"}</label>
-            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
-          </div>
+          {routeType === "regular" && (
+            <div>
+              <label className="block text-sm font-semibold mb-2">Start time</label>
+              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+            </div>
+          )}
         </div>
 
         {/* Regular route fields */}

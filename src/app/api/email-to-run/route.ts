@@ -63,12 +63,7 @@ async function getNextJobNumber(dateISO: string): Promise<string> {
   return `MLC-${dateKey}-${String(counter).padStart(3, "0")}`;
 }
 
-/** Use Claude to parse email content into structured run data */
-async function parseEmailWithClaude(
-  emailBody: string,
-  subject: string,
-  customerNames: string[]
-): Promise<{
+type ParsedEmail = {
   customer: string;
   date: string;
   postcodes: { postcode: string; time?: string }[];
@@ -76,19 +71,36 @@ async function parseEmailWithClaude(
   loadRef: string;
   fromPostcode: string;
   notes: string;
-}> {
+};
+
+type PostmarkAttachment = {
+  Name: string;
+  Content: string; // base64
+  ContentType: string;
+  ContentLength: number;
+};
+
+/** Extract PDF attachments from Postmark payload */
+function getPdfAttachments(payload: any): PostmarkAttachment[] {
+  const attachments: PostmarkAttachment[] = payload.Attachments ?? payload.attachments ?? [];
+  return attachments.filter(
+    (a) => a.ContentType === "application/pdf" || a.Name?.toLowerCase().endsWith(".pdf")
+  );
+}
+
+/** Use Claude to parse email content (+ optional PDF attachments) into structured run data */
+async function parseEmailWithClaude(
+  emailBody: string,
+  subject: string,
+  customerNames: string[],
+  pdfAttachments: PostmarkAttachment[] = []
+): Promise<ParsedEmail> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
   const client = new Anthropic({ apiKey });
 
-  const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 1024,
-    messages: [
-      {
-        role: "user",
-        content: `You are parsing a UK logistics/delivery email to extract delivery run information.
+  const prompt = `You are parsing a UK logistics/delivery email to extract delivery run information.
 
 Extract these fields and return ONLY valid JSON (no markdown, no code fences):
 
@@ -111,13 +123,34 @@ IMPORTANT RULES:
 - For dates: if only day/month given, assume year is 2026. If no date found, use "${todayISO()}"
 - Known customers in the system: ${customerNames.join(", ")}. Match to the closest one if possible.
 - If you can't determine a field, use empty string
+- Check BOTH the email body AND any attached PDF documents for delivery information
 
 Email subject: ${subject}
 
 Email body:
-${emailBody}`,
+${emailBody}`;
+
+  // Build content blocks: text prompt + any PDF documents
+  const contentBlocks: Anthropic.MessageCreateParams["messages"][0]["content"] = [];
+
+  // Add PDF attachments first so Claude sees them before the prompt
+  for (const pdf of pdfAttachments) {
+    contentBlocks.push({
+      type: "document",
+      source: {
+        type: "base64",
+        media_type: "application/pdf",
+        data: pdf.Content,
       },
-    ],
+    });
+  }
+
+  contentBlocks.push({ type: "text", text: prompt });
+
+  const response = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: contentBlocks }],
   });
 
   const text =
@@ -160,14 +193,17 @@ export async function POST(req: Request) {
 
     const emailBody = textBody.trim() || stripHtml(htmlBody);
 
-    if (!emailBody) {
-      // Log empty email
+    // 2b. Extract PDF attachments
+    const pdfAttachments = getPdfAttachments(payload);
+
+    if (!emailBody && pdfAttachments.length === 0) {
+      // Log empty email with no attachments
       await sb.from("email_logs").insert({
         from_address: fromAddress,
         subject,
         body: "",
         status: "error",
-        error: "Empty email body",
+        error: "Empty email body and no PDF attachments",
       });
       return NextResponse.json({ ok: true, message: "Empty email — skipped" });
     }
@@ -181,10 +217,10 @@ export async function POST(req: Request) {
       (customers ?? []).map((c: any) => [c.name.toLowerCase(), c])
     );
 
-    // 4. Parse with Claude
+    // 4. Parse with Claude (email body + any PDF attachments)
     let parsed;
     try {
-      parsed = await parseEmailWithClaude(emailBody, subject, customerNames);
+      parsed = await parseEmailWithClaude(emailBody || "(see attached PDF)", subject, customerNames, pdfAttachments);
     } catch (parseErr: unknown) {
       const msg =
         parseErr instanceof Error ? parseErr.message : String(parseErr);

@@ -23,6 +23,7 @@ import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
 import { useNicknames } from "@/hooks/useNicknames";
 import { withNickname } from "@/lib/postcode-nicknames";
+import { generateEtaPdf } from "@/lib/generateEtaPdf";
 import {
   DndContext,
   PointerSensor,
@@ -1039,12 +1040,24 @@ export default function RunDetailPage() {
             ← Back to runs
           </button>
 
-          <span className="text-sm text-gray-300">
-            Mode:{" "}
-            <span className={isAdmin ? "text-emerald-400 font-semibold" : "text-gray-400 font-semibold"}>
-              {isAdmin ? "Admin" : "View only"}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => {
+                if (!run || !etaChain) return;
+                generateEtaPdf({ run, etaChain, stops, stopRefs, nicknames });
+              }}
+              disabled={!etaChain}
+              className="px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Print ETA
+            </button>
+            <span className="text-sm text-gray-300">
+              Mode:{" "}
+              <span className={isAdmin ? "text-emerald-400 font-semibold" : "text-gray-400 font-semibold"}>
+                {isAdmin ? "Admin" : "View only"}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
 
         <h1 className="text-3xl font-bold mt-6">

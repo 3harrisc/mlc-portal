@@ -66,9 +66,10 @@ async function getNextJobNumber(dateISO: string): Promise<string> {
 type ParsedEmail = {
   customer: string;
   date: string;
-  postcodes: { postcode: string; time?: string }[];
+  postcodes: { postcode: string; time?: string; ref?: string }[];
   vehicle: string;
   loadRef: string;
+  collectionRef: string;
   fromPostcode: string;
   notes: string;
 };
@@ -108,10 +109,11 @@ Extract these fields and return ONLY valid JSON (no markdown, no code fences):
   "customer": "customer or company name sending/receiving the goods",
   "date": "delivery date in YYYY-MM-DD format",
   "postcodes": [
-    {"postcode": "XX1 2YY", "time": "HH:MM or null"}
+    {"postcode": "XX1 2YY", "time": "HH:MM or null", "ref": "delivery reference or null"}
   ],
   "vehicle": "vehicle registration if mentioned, or empty string",
-  "loadRef": "any booking/load/order reference number, or empty string",
+  "loadRef": "any overall booking/load/order reference number, or empty string",
+  "collectionRef": "collection or pickup reference/booking number, or empty string",
   "fromPostcode": "collection/base postcode if mentioned, or empty string",
   "notes": "any special instructions or notes, or empty string"
 }
@@ -122,8 +124,12 @@ IMPORTANT RULES:
 - Times should be in 24hr HH:MM format (e.g. "14:00"), or null if not specified
 - For dates: if only day/month given, assume year is 2026. If no date found, use "${todayISO()}"
 - Known customers in the system: ${customerNames.join(", ")}. Match to the closest one if possible.
-- If you can't determine a field, use empty string
+- If you can't determine a field, use empty string or null as appropriate
 - Check BOTH the email body AND any attached PDF documents for delivery information
+- "collectionRef" is a reference number for the collection/pickup (e.g. booking ref, collection number)
+- "loadRef" is the overall load or order reference number
+- Each postcode's "ref" is a per-delivery reference number (e.g. delivery note number, consignment number, DN ref)
+- Look for ANY reference numbers, booking numbers, order numbers, consignment numbers, DN numbers etc.
 
 Email subject: ${subject}
 
@@ -250,12 +256,14 @@ export async function POST(req: Request) {
       ? parsed.date
       : todayISO();
 
-    // 7. Build postcodes raw text
+    // 7. Build postcodes raw text (postcode [time] [REF:xxx])
     const postcodeLines = (parsed.postcodes || [])
       .filter((p: any) => p.postcode)
       .map((p: any) => {
         const pc = normalizePostcode(p.postcode);
-        return p.time ? `${pc} ${p.time}` : pc;
+        let line = p.time ? `${pc} ${p.time}` : pc;
+        if (p.ref) line += ` REF:${p.ref}`;
+        return line;
       });
 
     if (!postcodeLines.length) {
@@ -281,10 +289,14 @@ export async function POST(req: Request) {
       ? normalizePostcode(parsed.fromPostcode)
       : normalizePostcode(basePostcode);
 
+    // Combine collection ref and load ref
+    const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
+    const combinedRef = refs.join(" / ") || "";
+
     const run: PlannedRun = {
       id: crypto.randomUUID(),
       jobNumber,
-      loadRef: parsed.loadRef || "",
+      loadRef: combinedRef,
       date: runDate,
       customer: customerName,
       vehicle: parsed.vehicle || "",

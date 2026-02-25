@@ -294,6 +294,23 @@ export default function RunDetailPage() {
     return parseStops(run.rawText);
   }, [run]);
 
+  // Extract per-stop delivery refs from rawText lines (e.g. "BS1 4DJ 09:00 REF:ABC123")
+  const stopRefs = useMemo(() => {
+    if (!run) return new Map<number, string>();
+    const refs = new Map<number, string>();
+    const lines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    let stopIdx = 0;
+    for (const line of lines) {
+      const hasPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line);
+      if (hasPostcode) {
+        const refMatch = line.match(/REF:(.+?)$/i);
+        if (refMatch) refs.set(stopIdx, refMatch[1].trim());
+        stopIdx++;
+      }
+    }
+    return refs;
+  }, [run]);
+
   const effectiveEnd = useMemo(() => {
     if (!run) return "";
     if (run.returnToBase) return normalizePostcode(run.fromPostcode);
@@ -1347,6 +1364,9 @@ export default function RunDetailPage() {
                             <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
                           )}
                         </div>
+                        {stopRefs.get(idx) && (
+                          <div className="text-xs text-gray-400">Ref: {stopRefs.get(idx)}</div>
+                        )}
                         {status === "on_site" && progress?.onSiteSinceMs && (
                           <div className="text-xs text-gray-500">
                             On site for {minutesBetween(progress.onSiteSinceMs, Date.now())} mins

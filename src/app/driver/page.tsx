@@ -143,6 +143,23 @@ export default function DriverPage() {
     return parseStops(run.rawText);
   }, [run]);
 
+  // Extract per-stop delivery refs from rawText lines (e.g. "BS1 4DJ 09:00 REF:ABC123")
+  const stopRefs = useMemo(() => {
+    if (!run) return new Map<number, string>();
+    const refs = new Map<number, string>();
+    const lines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    let stopIdx = 0;
+    for (const line of lines) {
+      const hasPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line);
+      if (hasPostcode) {
+        const refMatch = line.match(/REF:(.+?)$/i);
+        if (refMatch) refs.set(stopIdx, refMatch[1].trim());
+        stopIdx++;
+      }
+    }
+    return refs;
+  }, [run]);
+
   // ── Register service worker for PWA ──
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -692,6 +709,9 @@ export default function DriverPage() {
           <div className="font-semibold text-lg mt-1">
             {run.jobNumber} &bull; {run.customer}
           </div>
+          {run.loadRef && (
+            <div className="text-sm text-gray-300 mt-1">Ref: {run.loadRef}</div>
+          )}
           <div className="text-sm text-gray-400 mt-1">
             From {withNickname(run.fromPostcode, nicknames)}
             {run.toPostcode ? ` \u2192 ${run.toPostcode}` : ""}
@@ -705,6 +725,9 @@ export default function DriverPage() {
               Next Stop
             </div>
             <div className="text-2xl font-bold mt-1">{withNickname(nextPc, nicknames)}</div>
+            {nextIdx != null && stopRefs.get(nextIdx) && (
+              <div className="text-sm text-blue-200/70 mt-0.5">Ref: {stopRefs.get(nextIdx)}</div>
+            )}
             <div className="text-sm text-blue-200 mt-1">
               {etaText !== "—" && etaText !== "Done" ? (
                 <>
@@ -784,6 +807,9 @@ export default function DriverPage() {
                       </div>
                       <div className="min-w-0">
                         <div className="font-semibold">{withNickname(pc, nicknames)}</div>
+                        {stopRefs.get(idx) && (
+                          <div className="text-xs text-gray-400">Ref: {stopRefs.get(idx)}</div>
+                        )}
                         {status === "completed" &&
                           run?.completedMeta?.[idx] && (
                             <div className="text-xs text-gray-500">

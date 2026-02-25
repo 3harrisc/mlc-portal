@@ -112,6 +112,7 @@ type ParsedRun = {
   vehicle: string;
   loadRef: string;
   collectionRef: string;
+  deliveryTime: string;
   collectionTime: string;
   price: string;
   notes: string;
@@ -186,7 +187,8 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "vehicle": "vehicle registration if mentioned, or empty string",
       "loadRef": "reference number for this load/run, or empty string",
       "collectionRef": "collection reference number, or empty string",
-      "collectionTime": "collection/booking time in HH:MM 24hr format, or empty string",
+      "deliveryTime": "delivery/booking time at the destination in HH:MM 24hr format, or empty string",
+      "collectionTime": "collection/pickup time in HH:MM 24hr format (backloads only), or empty string",
       "price": "price if mentioned (e.g. '£350'), or empty string",
       "notes": "any notes, pallet counts, vehicle type requirements, or empty string"
     }
@@ -208,6 +210,8 @@ ${depotList}
 - If you recognize a from/origin location, put the postcode in "fromPostcode"
 - Look for reference numbers, booking numbers, consignment numbers — put them in loadRef or collectionRef as appropriate
 - For backloads at the bottom of confirmation emails, the "collectionRef" is the reference number and "fromLocation"/"fromPostcode" is where to collect from
+- For regular runs in a table, the "Time" column is the DELIVERY/BOOKING time at the destination — put it in "deliveryTime", NOT "collectionTime"
+- "collectionTime" is ONLY for backload collection/pickup times
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array
 - Check BOTH the email body AND any attached PDF documents
@@ -276,6 +280,7 @@ ${emailBody}`;
     vehicle: single.vehicle || "",
     loadRef: single.loadRef || "",
     collectionRef: single.collectionRef || "",
+    deliveryTime: "",
     collectionTime: single.collectionTime || "",
     price: "",
     notes: single.notes || "",
@@ -440,7 +445,9 @@ export async function POST(req: Request) {
           : resolveLocation(parsed.destination || "");
 
         if (destPc && /^[A-Z]{1,2}\d/i.test(destPc)) {
-          let line = parsed.collectionTime ? `${destPc} ${parsed.collectionTime}` : destPc;
+          // Use delivery time for the destination stop (not collection time)
+          const bookingTime = parsed.deliveryTime || parsed.collectionTime || "";
+          let line = bookingTime ? `${destPc} ${bookingTime}` : destPc;
           if (parsed.loadRef) line += ` REF:${parsed.loadRef}`;
           postcodeLines = [line];
         }
@@ -468,9 +475,12 @@ export async function POST(req: Request) {
       }
 
       // Determine start time
+      // For multi-run emails, the times are delivery booking times — don't use them as start time
       const collectionTime = parsed.collectionTime || "";
       const firstDeliveryTime = (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time;
-      const startTime = collectionTime || firstDeliveryTime || "08:00";
+      const startTime = isMultiRun
+        ? (collectionTime || "08:00")
+        : (collectionTime || firstDeliveryTime || "08:00");
 
 
       const run: PlannedRun = {
@@ -481,8 +491,8 @@ export async function POST(req: Request) {
         customer: customerName,
         vehicle: parsed.vehicle || "",
         fromPostcode: fromPc,
-        toPostcode: runType === "regular" ? fromPc : fromPc,
-        returnToBase: runType === "regular",
+        toPostcode: fromPc,
+        returnToBase: false,
         startTime,
         serviceMins: 25,
         includeBreaks: true,

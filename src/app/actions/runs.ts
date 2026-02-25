@@ -26,6 +26,7 @@ export async function createRuns(runs: PlannedRun[]) {
 export async function updateRun(
   id: string,
   fields: Partial<{
+    date: string;
     vehicle: string;
     loadRef: string;
     rawText: string;
@@ -41,6 +42,7 @@ export async function updateRun(
 
   // Map camelCase fields to snake_case
   const row: Record<string, any> = {};
+  if (fields.date !== undefined) row.date = fields.date;
   if (fields.vehicle !== undefined) row.vehicle = fields.vehicle;
   if (fields.loadRef !== undefined) row.load_ref = fields.loadRef;
   if (fields.rawText !== undefined) row.raw_text = fields.rawText;

@@ -326,6 +326,7 @@ export default function RunDetailPage() {
     setRun(updated);
     // Fire-and-forget server action
     updateRunAction(updated.id, {
+      date: updated.date,
       vehicle: updated.vehicle,
       loadRef: updated.loadRef,
     });
@@ -1036,7 +1037,7 @@ export default function RunDetailPage() {
       <Navigation />
       <div className="max-w-6xl mx-auto p-4 md:p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <button onClick={() => router.back()} className="text-blue-400 underline">
+          <button onClick={() => router.push(`/runs?date=${run.date}`)} className="text-blue-400 underline">
             ← Back to runs
           </button>
 
@@ -1062,7 +1063,19 @@ export default function RunDetailPage() {
         </div>
 
         <h1 className="text-3xl font-bold mt-6">
-          {run.date} • {run.customer}
+          {isAdmin ? (
+            <input
+              type="date"
+              value={run.date}
+              onChange={(e) => {
+                if (e.target.value) persist({ ...run, date: e.target.value });
+              }}
+              className="bg-transparent border-b border-white/20 focus:border-blue-400 outline-none text-white text-3xl font-bold w-[10ch] cursor-pointer"
+            />
+          ) : (
+            run.date
+          )}
+          {" "}• {run.customer}
           {run.runType === "backload" && (
             <span className="ml-3 text-purple-400 text-base font-semibold">BACKLOAD</span>
           )}

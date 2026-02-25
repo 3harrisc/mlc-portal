@@ -472,9 +472,6 @@ export async function POST(req: Request) {
       const firstDeliveryTime = (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time;
       const startTime = collectionTime || firstDeliveryTime || "08:00";
 
-      // Append price if present
-      const price = parsed.price || "";
-      if (price) loadRefFinal = `${loadRefFinal} (${price})`.trim();
 
       const run: PlannedRun = {
         id: crypto.randomUUID(),

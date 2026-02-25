@@ -454,24 +454,32 @@ export async function POST(req: Request) {
       // Get job number
       const jobNumber = await getNextJobNumber(runDate);
 
-      // Build refs
-      const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
-      const combinedRef = refs.join(" / ") || "";
+      // Build refs — multi-run emails use the run name (e.g. "Tamworth Load 1")
+      const isMultiRun = parsedRuns.length > 1;
+      let loadRefFinal: string;
+
+      if (isMultiRun && parsed.name) {
+        // Use run name as primary ref, append Consolid8 ref number if present
+        const refNum = parsed.loadRef || parsed.collectionRef || "";
+        loadRefFinal = refNum ? `${parsed.name} / ${refNum}` : parsed.name;
+      } else {
+        const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
+        loadRefFinal = refs.join(" / ") || "";
+      }
 
       // Determine start time
       const collectionTime = parsed.collectionTime || "";
       const firstDeliveryTime = (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time;
       const startTime = collectionTime || firstDeliveryTime || "08:00";
 
-      // Collect pallet/vehicle notes
-      const notes = parsed.notes || "";
+      // Append price if present
       const price = parsed.price || "";
-      const loadRefWithPrice = price ? `${combinedRef} (${price})`.trim() : combinedRef;
+      if (price) loadRefFinal = `${loadRefFinal} (${price})`.trim();
 
       const run: PlannedRun = {
         id: crypto.randomUUID(),
         jobNumber,
-        loadRef: loadRefWithPrice,
+        loadRef: loadRefFinal,
         date: runDate,
         customer: customerName,
         vehicle: parsed.vehicle || "",

@@ -32,8 +32,8 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Allow cron endpoints through without user auth
-  if (pathname.startsWith("/api/cron")) {
+  // Allow webhook endpoints through without user auth
+  if (pathname.startsWith("/api/cron") || pathname.startsWith("/api/email-to-run")) {
     return supabaseResponse;
   }
 

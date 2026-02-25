@@ -181,10 +181,16 @@ export async function POST(req: Request) {
   const startMs = Date.now();
   const sb = getSupabaseAdmin();
 
-  // 1. Authenticate
+  // 1. Authenticate (supports header or query param)
   const authHeader = req.headers.get("authorization");
+  const url = new URL(req.url);
+  const querySecret = url.searchParams.get("secret");
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (
+    cronSecret &&
+    authHeader !== `Bearer ${cronSecret}` &&
+    querySecret !== cronSecret
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

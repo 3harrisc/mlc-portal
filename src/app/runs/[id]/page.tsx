@@ -1047,9 +1047,10 @@ export default function RunDetailPage() {
                 generateEtaPdf({ run, etaChain, stops, stopRefs, nicknames });
               }}
               disabled={!etaChain}
-              className="px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title={etaChain ? "Download ETA schedule as PDF" : "Waiting for ETAs to load..."}
             >
-              Print ETA
+              {etaChain ? "Print ETA" : "Print ETA (loading...)"}
             </button>
             <span className="text-sm text-gray-300">
               Mode:{" "}

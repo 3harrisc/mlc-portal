@@ -212,6 +212,7 @@ ${depotList}
 - For backloads at the bottom of confirmation emails, the "collectionRef" is the reference number and "fromLocation"/"fromPostcode" is where to collect from
 - For regular runs in a table, the "Time" column is the DELIVERY/BOOKING time at the destination — put it in "deliveryTime", NOT "collectionTime"
 - "collectionTime" is ONLY for backload collection/pickup times
+- ALL runs in the same email are for the SAME date. Use the date from the table/header for ALL runs including backloads listed at the bottom
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array
 - Check BOTH the email body AND any attached PDF documents
@@ -380,7 +381,32 @@ export async function POST(req: Request) {
       });
     }
 
-    // 5. Process each parsed run into a PlannedRun
+    // 5. Align dates — all runs from same email share the same date
+    //    Find the most common explicit date (not today) and apply to runs missing a date
+    const today = todayISO();
+    const dateCounts = new Map<string, number>();
+    for (const r of parsedRuns) {
+      if (r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date)) {
+        dateCounts.set(r.date, (dateCounts.get(r.date) || 0) + 1);
+      }
+    }
+    // Pick the most common date that isn't today (or just most common if all are today)
+    let sharedDate = today;
+    let maxCount = 0;
+    for (const [d, count] of dateCounts) {
+      if (count > maxCount || (count === maxCount && d !== today)) {
+        sharedDate = d;
+        maxCount = count;
+      }
+    }
+    // Apply shared date to runs that defaulted to today or have no date
+    for (const r of parsedRuns) {
+      if (!r.date || r.date === today) {
+        r.date = sharedDate;
+      }
+    }
+
+    // 6. Process each parsed run into a PlannedRun
     const createdRuns: { jobNumber: string; runId: string; customer: string; stops: number; name: string }[] = [];
     const errors: string[] = [];
 

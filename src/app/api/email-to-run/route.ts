@@ -12,8 +12,43 @@ const DEFAULT_PROGRESS = {
   lastInside: false,
 };
 
+/** Known depot/location names → postcodes */
+const DEPOT_ALIASES: Record<string, string> = {
+  "tamworth": "B78 3HJ",
+  "premier park": "NW10 7NZ",
+  "prem park": "NW10 7NZ",
+  "portbury": "BS20 7XN",
+  "newark": "NG22 8TX",
+  "middleton foods": "WV14 0LH",
+  "middleton foods willenhall": "WV14 0LH",
+  "willenhall": "WV14 0LH",
+  "purity soft drinks": "WS10 0BU",
+  "purity soft drinks wednesbury": "WS10 0BU",
+  "wednesbury": "WS10 0BU",
+};
+
+const BASE_POSTCODE = "NG22 8TX"; // Newark base
+
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** Resolve a location name or postcode to a valid postcode */
+function resolveLocation(nameOrPostcode: string): string {
+  if (!nameOrPostcode) return "";
+  const trimmed = nameOrPostcode.trim();
+  // If it looks like a UK postcode already, normalize it
+  if (/^[A-Z]{1,2}\d/i.test(trimmed)) {
+    return normalizePostcode(trimmed);
+  }
+  // Try depot alias lookup
+  const lower = trimmed.toLowerCase();
+  for (const [alias, pc] of Object.entries(DEPOT_ALIASES)) {
+    if (lower.includes(alias) || alias.includes(lower)) {
+      return normalizePostcode(pc);
+    }
+  }
+  return trimmed;
 }
 
 /** Strip HTML tags to plain text */
@@ -63,7 +98,31 @@ async function getNextJobNumber(dateISO: string): Promise<string> {
   return `MLC-${dateKey}-${String(counter).padStart(3, "0")}`;
 }
 
-type ParsedEmail = {
+/** A single parsed run from the email */
+type ParsedRun = {
+  name: string;
+  type: "regular" | "backload";
+  customer: string;
+  date: string;
+  destination: string;
+  destinationPostcode: string;
+  fromLocation: string;
+  fromPostcode: string;
+  deliveryPostcodes: { postcode: string; time?: string; ref?: string }[];
+  vehicle: string;
+  loadRef: string;
+  collectionRef: string;
+  collectionTime: string;
+  price: string;
+  notes: string;
+};
+
+/** Response from Claude: either multi-run or single-run format */
+type ParsedEmailMulti = {
+  runs: ParsedRun[];
+};
+
+type ParsedEmailSingle = {
   customer: string;
   date: string;
   postcodes: { postcode: string; time?: string; ref?: string }[];
@@ -90,49 +149,68 @@ function getPdfAttachments(payload: any): PostmarkAttachment[] {
   );
 }
 
-/** Use Claude to parse email content (+ optional PDF attachments) into structured run data */
+/** Use Claude to parse email into multiple runs */
 async function parseEmailWithClaude(
   emailBody: string,
   subject: string,
   customerNames: string[],
   pdfAttachments: PostmarkAttachment[] = []
-): Promise<ParsedEmail> {
+): Promise<ParsedRun[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
   const client = new Anthropic({ apiKey });
 
-  const prompt = `You are parsing a UK logistics/delivery email to extract delivery run information.
+  const depotList = Object.entries(DEPOT_ALIASES)
+    .map(([name, pc]) => `  "${name}" = ${pc}`)
+    .join("\n");
 
-Extract these fields and return ONLY valid JSON (no markdown, no code fences):
+  const prompt = `You are parsing a UK logistics/delivery email. The email may contain MULTIPLE runs (deliveries/loads) in a table or list format, OR it may be a single delivery email.
+
+Return ONLY valid JSON (no markdown, no code fences) with this structure:
 
 {
-  "customer": "customer or company name sending/receiving the goods",
-  "date": "delivery date in YYYY-MM-DD format",
-  "postcodes": [
-    {"postcode": "XX1 2YY", "time": "HH:MM or null", "ref": "delivery reference or null"}
-  ],
-  "vehicle": "vehicle registration if mentioned, or empty string",
-  "loadRef": "any overall booking/load/order reference number, or empty string",
-  "collectionRef": "collection or pickup reference/booking number, or empty string",
-  "collectionTime": "collection/pickup time in HH:MM 24hr format, or empty string",
-  "fromPostcode": "collection/base postcode if mentioned, or empty string",
-  "notes": "any special instructions or notes, or empty string"
+  "runs": [
+    {
+      "name": "descriptive name of the run (e.g. 'Tamworth Load 1', 'Portbury Load 2')",
+      "type": "regular or backload",
+      "customer": "customer or company name",
+      "date": "YYYY-MM-DD",
+      "destination": "destination name (e.g. 'Tamworth', 'Portbury', 'Premier Park')",
+      "destinationPostcode": "destination postcode if known, or empty string",
+      "fromLocation": "collection/origin location name, or empty string",
+      "fromPostcode": "collection/origin postcode if known, or empty string",
+      "deliveryPostcodes": [
+        {"postcode": "XX1 2YY", "time": "HH:MM or null", "ref": "reference or null"}
+      ],
+      "vehicle": "vehicle registration if mentioned, or empty string",
+      "loadRef": "reference number for this load/run, or empty string",
+      "collectionRef": "collection reference number, or empty string",
+      "collectionTime": "collection/booking time in HH:MM 24hr format, or empty string",
+      "price": "price if mentioned (e.g. '£350'), or empty string",
+      "notes": "any notes, pallet counts, vehicle type requirements, or empty string"
+    }
+  ]
 }
 
 IMPORTANT RULES:
-- Postcodes must be valid UK postcodes (e.g. "LS9 0AB", "M1 2XX", "GL2 7ND")
-- Include ALL postcodes found — both collection and delivery locations
-- Times should be in 24hr HH:MM format (e.g. "14:00"), or null if not specified
+- If the email contains a TABLE or LIST of multiple loads/runs, create a SEPARATE entry for each one
+- Each row in a table = one run
+- "regular" runs go from a base/depot to a destination and back
+- "backload" runs are collections from a specific location (often listed separately at the bottom, or marked as backload/return load/collection)
+- Backloads are typically extra jobs added after the main runs, collected from a named location
 - For dates: if only day/month given, assume year is 2026. If no date found, use "${todayISO()}"
+- Times should be in 24hr HH:MM format
 - Known customers in the system: ${customerNames.join(", ")}. Match to the closest one if possible.
-- If you can't determine a field, use empty string or null as appropriate
-- Check BOTH the email body AND any attached PDF documents for delivery information
-- "collectionRef" is a reference number for the collection/pickup (e.g. booking ref, collection number)
-- "collectionTime" is when the collection/pickup is booked for (e.g. "08:00", "14:30")
-- "loadRef" is the overall load or order reference number
-- Each postcode's "ref" is a per-delivery reference number (e.g. delivery note number, consignment number, DN ref)
-- Look for ANY reference numbers, booking numbers, order numbers, consignment numbers, DN numbers etc.
+- Known depot/location postcodes:
+${depotList}
+- If you recognize a destination name that matches a known depot, put the postcode in "destinationPostcode"
+- If you recognize a from/origin location, put the postcode in "fromPostcode"
+- Look for reference numbers, booking numbers, consignment numbers — put them in loadRef or collectionRef as appropriate
+- For backloads at the bottom of confirmation emails, the "collectionRef" is the reference number and "fromLocation"/"fromPostcode" is where to collect from
+- Pallet counts, curtain-sider requirements, etc. go in "notes"
+- If there's only ONE run in the email, still return it in the "runs" array
+- Check BOTH the email body AND any attached PDF documents
 
 Email subject: ${subject}
 
@@ -158,7 +236,7 @@ ${emailBody}`;
 
   const response = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 1024,
+    max_tokens: 2048,
     messages: [{ role: "user", content: contentBlocks }],
   });
 
@@ -171,11 +249,37 @@ ${emailBody}`;
     jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
   }
 
+  let parsed: any;
   try {
-    return JSON.parse(jsonStr);
+    parsed = JSON.parse(jsonStr);
   } catch {
     throw new Error(`Failed to parse Claude response as JSON: ${text.slice(0, 200)}`);
   }
+
+  // Handle both multi-run and legacy single-run format
+  if (parsed.runs && Array.isArray(parsed.runs)) {
+    return parsed.runs;
+  }
+
+  // Legacy single-run format — convert to multi-run
+  const single = parsed as ParsedEmailSingle;
+  return [{
+    name: single.customer || "Run",
+    type: "backload",
+    customer: single.customer || "",
+    date: single.date || "",
+    destination: "",
+    destinationPostcode: "",
+    fromLocation: "",
+    fromPostcode: single.fromPostcode || "",
+    deliveryPostcodes: single.postcodes || [],
+    vehicle: single.vehicle || "",
+    loadRef: single.loadRef || "",
+    collectionRef: single.collectionRef || "",
+    collectionTime: single.collectionTime || "",
+    price: "",
+    notes: single.notes || "",
+  }];
 }
 
 // ── Main handler ─────────────────────────────────────────────────────
@@ -212,7 +316,6 @@ export async function POST(req: Request) {
     const pdfAttachments = getPdfAttachments(payload);
 
     if (!emailBody && pdfAttachments.length === 0) {
-      // Log empty email with no attachments
       await sb.from("email_logs").insert({
         from_address: fromAddress,
         subject,
@@ -232,10 +335,15 @@ export async function POST(req: Request) {
       (customers ?? []).map((c: any) => [c.name.toLowerCase(), c])
     );
 
-    // 4. Parse with Claude (email body + any PDF attachments)
-    let parsed;
+    // 4. Parse with Claude — returns array of runs
+    let parsedRuns: ParsedRun[];
     try {
-      parsed = await parseEmailWithClaude(emailBody || "(see attached PDF)", subject, customerNames, pdfAttachments);
+      parsedRuns = await parseEmailWithClaude(
+        emailBody || "(see attached PDF)",
+        subject,
+        customerNames,
+        pdfAttachments
+      );
     } catch (parseErr: unknown) {
       const msg =
         parseErr instanceof Error ? parseErr.message : String(parseErr);
@@ -252,118 +360,174 @@ export async function POST(req: Request) {
       });
     }
 
-    // 5. Validate & resolve customer (use parsed name even if not in system)
-    const matchedCustomer = customerNames.find(
-      (c: string) => c.toLowerCase() === (parsed.customer || "").toLowerCase()
-    );
-    const customerName = matchedCustomer || parsed.customer || "Unknown";
-    const customerData = customerMap.get(customerName.toLowerCase());
-    const basePostcode = customerData?.base_postcode || "GL2 7ND";
-
-    // 6. Resolve date
-    const runDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)
-      ? parsed.date
-      : todayISO();
-
-    // 7. Build postcodes raw text (postcode [time] [REF:xxx])
-    const postcodeLines = (parsed.postcodes || [])
-      .filter((p: any) => p.postcode)
-      .map((p: any) => {
-        const pc = normalizePostcode(p.postcode);
-        let line = p.time ? `${pc} ${p.time}` : pc;
-        if (p.ref) line += ` REF:${p.ref}`;
-        return line;
-      });
-
-    if (!postcodeLines.length) {
+    if (!parsedRuns.length) {
       await sb.from("email_logs").insert({
         from_address: fromAddress,
         subject,
         body: emailBody.slice(0, 10000),
-        parsed_data: parsed,
+        parsed_data: { runs: parsedRuns },
         status: "error",
-        error: "No postcodes found in email",
+        error: "No runs found in email",
       });
       return NextResponse.json({
         ok: true,
-        message: "No postcodes found — logged for review",
+        message: "No runs found — logged for review",
       });
     }
 
-    // 8. Get job number
-    const jobNumber = await getNextJobNumber(runDate);
+    // 5. Process each parsed run into a PlannedRun
+    const createdRuns: { jobNumber: string; runId: string; customer: string; stops: number; name: string }[] = [];
+    const errors: string[] = [];
 
-    // 9. Build and insert run (as backload)
-    const fromPc = parsed.fromPostcode
-      ? normalizePostcode(parsed.fromPostcode)
-      : normalizePostcode(basePostcode);
+    for (const parsed of parsedRuns) {
+      // Resolve customer
+      const matchedCustomer = customerNames.find(
+        (c: string) => c.toLowerCase() === (parsed.customer || "").toLowerCase()
+      );
+      const customerName = matchedCustomer || parsed.customer || "Unknown";
+      const customerData = customerMap.get(customerName.toLowerCase());
 
-    // Combine collection ref and load ref
-    const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
-    const combinedRef = refs.join(" / ") || "";
+      // Resolve date
+      const runDate = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)
+        ? parsed.date
+        : todayISO();
 
-    // Use collection time or earliest delivery time as start time
-    const collectionTime = parsed.collectionTime || "";
-    const firstDeliveryTime = (parsed.postcodes || []).find((p: any) => p.time)?.time;
-    const startTime = collectionTime || firstDeliveryTime || "08:00";
+      // Determine run type
+      const runType = parsed.type === "regular" ? "regular" : "backload";
 
-    const run: PlannedRun = {
-      id: crypto.randomUUID(),
-      jobNumber,
-      loadRef: combinedRef,
-      date: runDate,
-      customer: customerName,
-      vehicle: parsed.vehicle || "",
-      fromPostcode: fromPc,
-      toPostcode: fromPc,
-      returnToBase: false,
-      startTime,
-      serviceMins: 25,
-      includeBreaks: true,
-      rawText: postcodeLines.join("\n"),
-      completedStopIndexes: [],
-      completedMeta: {},
-      progress: DEFAULT_PROGRESS,
-      runType: "backload",
-      runOrder: null,
-      collectionTime: collectionTime || undefined,
-    };
+      // Resolve from/to postcodes using depot aliases
+      let fromPc: string;
+      let toPc: string;
 
-    const { error: insertErr } = await sb
-      .from("runs")
-      .insert([runToRow(run)]);
+      if (runType === "regular") {
+        // Regular runs: from base (Newark) to destination, return to base
+        fromPc = parsed.fromPostcode
+          ? resolveLocation(parsed.fromPostcode)
+          : (parsed.fromLocation
+            ? resolveLocation(parsed.fromLocation)
+            : normalizePostcode(BASE_POSTCODE));
+        toPc = fromPc; // return to base
+      } else {
+        // Backloads: from collection point, no return
+        fromPc = parsed.fromPostcode
+          ? resolveLocation(parsed.fromPostcode)
+          : (parsed.fromLocation
+            ? resolveLocation(parsed.fromLocation)
+            : normalizePostcode(customerData?.base_postcode || BASE_POSTCODE));
+        toPc = fromPc;
+      }
 
-    if (insertErr) {
-      await sb.from("email_logs").insert({
-        from_address: fromAddress,
-        subject,
-        body: emailBody.slice(0, 10000),
-        parsed_data: parsed,
-        status: "error",
-        error: `Insert failed: ${insertErr.message}`,
+      // Build delivery postcodes
+      // For regular runs with a destination but no explicit delivery postcodes,
+      // use the destination as the single delivery stop
+      let postcodeLines: string[] = [];
+
+      if (parsed.deliveryPostcodes && parsed.deliveryPostcodes.length > 0) {
+        postcodeLines = parsed.deliveryPostcodes
+          .filter((p: any) => p.postcode)
+          .map((p: any) => {
+            const pc = normalizePostcode(p.postcode);
+            let line = p.time ? `${pc} ${p.time}` : pc;
+            if (p.ref) line += ` REF:${p.ref}`;
+            return line;
+          });
+      }
+
+      // If no delivery postcodes but we have a destination, resolve it
+      if (!postcodeLines.length) {
+        const destPc = parsed.destinationPostcode
+          ? resolveLocation(parsed.destinationPostcode)
+          : resolveLocation(parsed.destination || "");
+
+        if (destPc && /^[A-Z]{1,2}\d/i.test(destPc)) {
+          let line = parsed.collectionTime ? `${destPc} ${parsed.collectionTime}` : destPc;
+          if (parsed.loadRef) line += ` REF:${parsed.loadRef}`;
+          postcodeLines = [line];
+        }
+      }
+
+      if (!postcodeLines.length) {
+        errors.push(`Skipped "${parsed.name}": no postcodes resolved`);
+        continue;
+      }
+
+      // Get job number
+      const jobNumber = await getNextJobNumber(runDate);
+
+      // Build refs
+      const refs = [parsed.collectionRef, parsed.loadRef].filter(Boolean);
+      const combinedRef = refs.join(" / ") || "";
+
+      // Determine start time
+      const collectionTime = parsed.collectionTime || "";
+      const firstDeliveryTime = (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time;
+      const startTime = collectionTime || firstDeliveryTime || "08:00";
+
+      // Collect pallet/vehicle notes
+      const notes = parsed.notes || "";
+      const price = parsed.price || "";
+      const loadRefWithPrice = price ? `${combinedRef} (${price})`.trim() : combinedRef;
+
+      const run: PlannedRun = {
+        id: crypto.randomUUID(),
+        jobNumber,
+        loadRef: loadRefWithPrice,
+        date: runDate,
+        customer: customerName,
+        vehicle: parsed.vehicle || "",
+        fromPostcode: fromPc,
+        toPostcode: runType === "regular" ? fromPc : fromPc,
+        returnToBase: runType === "regular",
+        startTime,
+        serviceMins: 25,
+        includeBreaks: true,
+        rawText: postcodeLines.join("\n"),
+        completedStopIndexes: [],
+        completedMeta: {},
+        progress: DEFAULT_PROGRESS,
+        runType,
+        runOrder: null,
+        collectionTime: collectionTime || undefined,
+      };
+
+      const { error: insertErr } = await sb
+        .from("runs")
+        .insert([runToRow(run)]);
+
+      if (insertErr) {
+        errors.push(`Failed to insert "${parsed.name}": ${insertErr.message}`);
+        continue;
+      }
+
+      createdRuns.push({
+        jobNumber,
+        runId: run.id,
+        customer: customerName,
+        stops: postcodeLines.length,
+        name: parsed.name,
       });
-      return NextResponse.json({
-        ok: false,
-        error: insertErr.message,
-      }, { status: 500 });
     }
 
-    // 10. Log success
+    // 6. Log result
+    const status = createdRuns.length > 0
+      ? (errors.length > 0 ? "partial" : "created")
+      : "error";
+
     await sb.from("email_logs").insert({
       from_address: fromAddress,
       subject,
       body: emailBody.slice(0, 10000),
-      parsed_data: parsed,
-      run_id: run.id,
-      status: "created",
+      parsed_data: { runs: parsedRuns },
+      run_id: createdRuns[0]?.runId ?? null,
+      status,
+      error: errors.length > 0 ? errors.join("; ") : null,
     });
 
     return NextResponse.json({
-      ok: true,
-      jobNumber,
-      runId: run.id,
-      customer: customerName,
-      stops: postcodeLines.length,
+      ok: createdRuns.length > 0,
+      runsCreated: createdRuns.length,
+      runs: createdRuns,
+      errors: errors.length > 0 ? errors : undefined,
       durationMs: Date.now() - startMs,
     });
   } catch (e: unknown) {

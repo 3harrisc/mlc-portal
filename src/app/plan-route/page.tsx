@@ -285,6 +285,7 @@ export default function PlanRoutePage() {
   // Backload-specific
   const [collectFromPostcode, setCollectFromPostcode] = useState<string>("");
   const [collectionTime, setCollectionTime] = useState<string>("");
+  const [collectionDate, setCollectionDate] = useState<string>("");
 
   const [vehicle, setVehicle] = useState<string>("");
   const [loadRef, setLoadRef] = useState<string>("");
@@ -795,6 +796,7 @@ export default function PlanRoutePage() {
         runType: routeType,
         runOrder: null,
         collectionTime: isBackload && collectionTime ? collectionTime : undefined,
+        collectionDate: isBackload && collectionDate && collectionDate !== date ? collectionDate : undefined,
       });
     }
 
@@ -1163,6 +1165,12 @@ export default function PlanRoutePage() {
               <label className="block text-sm font-semibold mb-2">Collection booking time (optional)</label>
               <input type="time" value={collectionTime} onChange={(e) => setCollectionTime(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
               <div className="text-xs text-gray-400 mt-2">If the collection has a booked time slot.</div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold mb-2">Collection date (optional)</label>
+              <input type="date" value={collectionDate} onChange={(e) => setCollectionDate(e.target.value)} className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent" />
+              <div className="text-xs text-gray-400 mt-2">If collecting the day before delivery.</div>
             </div>
 
             <div>

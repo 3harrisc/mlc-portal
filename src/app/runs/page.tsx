@@ -147,6 +147,9 @@ function SortableRunCard({
             {completedCount > 0 && !complete && (
               <span className="text-emerald-400"> • {completedCount}/{stops.length} done</span>
             )}
+            {run.collectionDate && run.collectionDate !== run.date && (
+              <span className="text-cyan-400 ml-1">• Collect {run.collectionDate} → Deliver {run.date}</span>
+            )}
           </div>
         </div>
       </div>
@@ -226,6 +229,9 @@ function RunCard({
           )}
           {" "}• Start {run.startTime} • {stops.length} stop{stops.length === 1 ? "" : "s"}
           {completedCount > 0 && !complete && ` • ${completedCount}/${stops.length} done`}
+          {run.collectionDate && run.collectionDate !== run.date && (
+            <span className="text-cyan-400 ml-1">• Collect {run.collectionDate} → Deliver {run.date}</span>
+          )}
         </div>
       </div>
       <div className="flex gap-2 shrink-0">
@@ -293,7 +299,7 @@ export default function RunsPage() {
   const filtered = useMemo(() => {
     return runs
       .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
-      .filter((r) => isSearching ? true : (date ? r.date === date : true))
+      .filter((r) => isSearching ? true : (date ? (r.date === date || r.collectionDate === date) : true))
       .filter((r) => (customer === "All" ? true : r.customer === customer))
       .filter((r) => (vehicle ? r.vehicle?.trim() === vehicle.trim() : true))
       .filter((r) => runMatchesSearch(r, search))

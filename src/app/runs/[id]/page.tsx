@@ -329,6 +329,7 @@ export default function RunDetailPage() {
       date: updated.date,
       vehicle: updated.vehicle,
       loadRef: updated.loadRef,
+      collectionDate: updated.collectionDate || null,
     });
   }
 
@@ -1112,6 +1113,20 @@ export default function RunDetailPage() {
               Collection: <span className="text-gray-200 font-semibold">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span>
               {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
               {" "}• End at last delivery
+              {run.collectionDate && run.collectionDate !== run.date && (
+                <span className="text-cyan-400"> • Collect {run.collectionDate} → Deliver {run.date}</span>
+              )}
+              {isAdmin && (
+                <span className="ml-2">
+                  • Collection date:{" "}
+                  <input
+                    type="date"
+                    value={run.collectionDate || ""}
+                    onChange={(e) => persist({ ...run, collectionDate: e.target.value || undefined })}
+                    className="bg-transparent border-b border-white/20 focus:border-blue-400 outline-none text-cyan-400 text-sm w-[9ch] cursor-pointer"
+                  />
+                </span>
+              )}
             </>
           ) : (
             <>

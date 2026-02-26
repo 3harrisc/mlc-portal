@@ -36,6 +36,7 @@ export async function updateRun(
     runType: string;
     runOrder: number | null;
     collectionTime: string | null;
+    collectionDate: string | null;
   }>
 ) {
   const { supabase } = await getUser();
@@ -52,6 +53,7 @@ export async function updateRun(
   if (fields.runType !== undefined) row.run_type = fields.runType;
   if (fields.runOrder !== undefined) row.run_order = fields.runOrder;
   if (fields.collectionTime !== undefined) row.collection_time = fields.collectionTime;
+  if (fields.collectionDate !== undefined) row.collection_date = fields.collectionDate;
 
   const { error } = await supabase.from("runs").update(row).eq("id", id);
   if (error) return { error: error.message };

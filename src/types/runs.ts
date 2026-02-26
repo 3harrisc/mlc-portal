@@ -31,6 +31,7 @@ export type PlannedRun = {
   runType: RunType;
   runOrder: number | null;
   collectionTime?: string; // HH:MM booking time at collection (backloads)
+  collectionDate?: string; // YYYY-MM-DD if collection is on a different day to delivery
 };
 
 export type ProgressState = {
@@ -86,6 +87,7 @@ export function rowToRun(row: any): PlannedRun {
     runType: row.run_type ?? "regular",
     runOrder: row.run_order ?? null,
     collectionTime: row.collection_time ?? undefined,
+    collectionDate: row.collection_date ?? undefined,
   };
 }
 
@@ -112,6 +114,7 @@ export function runToRow(run: PlannedRun, userId?: string) {
     run_type: run.runType ?? "regular",
     run_order: run.runOrder ?? null,
     collection_time: run.collectionTime ?? null,
+    collection_date: run.collectionDate ?? null,
   };
 }
 

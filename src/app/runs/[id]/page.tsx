@@ -324,13 +324,14 @@ export default function RunDetailPage() {
   function persist(updated: PlannedRun) {
     if (!isAdmin) return;
     setRun(updated);
-    // Fire-and-forget server action
-    updateRunAction(updated.id, {
+    // Fire-and-forget server action — only send fields that exist
+    const fields: Record<string, any> = {
       date: updated.date,
       vehicle: updated.vehicle,
       loadRef: updated.loadRef,
-      collectionDate: updated.collectionDate || null,
-    });
+    };
+    if (updated.collectionDate) fields.collectionDate = updated.collectionDate;
+    updateRunAction(updated.id, fields);
   }
 
   /** Save progress to Supabase (debounced to avoid rapid writes during polling) */

@@ -165,11 +165,52 @@ export async function GET(req: Request) {
       posMap.set(pos.vehicle, pos);
     }
 
-    // 4. Run progress engine for each run
+    // 4. For chained runs (same vehicle + date), only track the first incomplete run.
+    //    This prevents auto-completing a later run when it shares a stop postcode
+    //    with an earlier run (e.g. two Tamworth loads on the same vehicle).
+    const skippedRunIds = new Set<string>();
+    {
+      // Group runs by vehicle + date
+      const groups = new Map<string, typeof activeRuns>();
+      for (const run of activeRuns) {
+        const key = `${normVehicle(run.vehicle)}|${run.date}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(run);
+      }
+      for (const [, group] of groups) {
+        if (group.length < 2) continue;
+        // Sort by run_order (nulls last), then by start_time
+        group.sort((a: any, b: any) => {
+          const oa = a.run_order ?? 999;
+          const ob = b.run_order ?? 999;
+          if (oa !== ob) return oa - ob;
+          return (a.start_time || "").localeCompare(b.start_time || "");
+        });
+        // Find the first run that still has uncompleted stops
+        let foundActive = false;
+        for (const run of group) {
+          const stops = runStopsMap.get(run.id) ?? [];
+          const completed = run.completed_stop_indexes ?? [];
+          const isComplete = stops.length > 0 && completed.length >= stops.length;
+          if (!isComplete && !foundActive) {
+            foundActive = true; // This is the active run — allow tracking
+          } else if (!isComplete && foundActive) {
+            skippedRunIds.add(run.id); // Later incomplete run — skip tracking
+          }
+        }
+      }
+    }
+
+    // 5. Run progress engine for each run
     let updated = 0;
     const results: { runId: string; vehicle: string; status: string }[] = [];
 
     for (const run of activeRuns) {
+      // Skip runs waiting for a prior chained run to finish
+      if (skippedRunIds.has(run.id)) {
+        results.push({ runId: run.id, vehicle: run.vehicle, status: "waiting_for_prior_run" });
+        continue;
+      }
       try {
       const stops = runStopsMap.get(run.id) ?? [];
       if (!stops.length) {

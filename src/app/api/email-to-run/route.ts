@@ -503,11 +503,15 @@ export async function POST(req: Request) {
       // Determine start time
       // For multi-run emails, the times are delivery booking times — don't use them as start time
       const collectionTime = parsed.collectionTime || "";
-      const firstDeliveryTime = (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time;
+      const deliveryTime = parsed.deliveryTime
+        || (parsed.deliveryPostcodes || []).find((p: any) => p.time)?.time
+        || "";
       const startTime = isMultiRun
         ? (collectionTime || "08:00")
-        : (collectionTime || firstDeliveryTime || "08:00");
+        : (collectionTime || deliveryTime || "08:00");
 
+      // Store booking time: for backloads it's the collection time, for regular runs the delivery time
+      const bookingTime = collectionTime || deliveryTime || undefined;
 
       const run: PlannedRun = {
         id: crypto.randomUUID(),
@@ -528,7 +532,7 @@ export async function POST(req: Request) {
         progress: DEFAULT_PROGRESS,
         runType,
         runOrder: null,
-        collectionTime: collectionTime || undefined,
+        collectionTime: bookingTime,
       };
 
       const { error: insertErr } = await sb

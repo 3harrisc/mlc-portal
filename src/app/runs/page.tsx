@@ -14,6 +14,7 @@ import { parseStops } from "@/lib/postcode-utils";
 import { useNicknames } from "@/hooks/useNicknames";
 import { withNickname } from "@/lib/postcode-nicknames";
 import { computeChainedStarts } from "@/lib/runDuration";
+import type { LngLat } from "@/lib/geo-utils";
 import {
   DndContext,
   PointerSensor,
@@ -278,6 +279,39 @@ export default function RunsPage() {
     fetchCustomerNames().then(setCustomerNames);
   }, []);
 
+  // Cache postcode coords for inter-run travel estimates
+  const [postcodeCoords, setPostcodeCoords] = useState<Record<string, LngLat>>({});
+
+  // Collect all postcodes used in multi-run vehicle groups
+  const chainPostcodes = useMemo(() => {
+    const pcs = new Set<string>();
+    for (const r of runs) {
+      if (!r.vehicle?.trim()) continue;
+      pcs.add(r.fromPostcode.toUpperCase().replace(/\s/g, ""));
+      const stops = parseStops(r.rawText);
+      if (stops.length) pcs.add(stops[stops.length - 1].toUpperCase().replace(/\s/g, ""));
+    }
+    return Array.from(pcs);
+  }, [runs]);
+
+  // Fetch coords from cache table when postcodes change
+  useEffect(() => {
+    if (!chainPostcodes.length) return;
+    const supabase = createClient();
+    supabase
+      .from("postcode_coords")
+      .select("postcode, lat, lng")
+      .in("postcode", chainPostcodes)
+      .then(({ data }) => {
+        if (!data) return;
+        const map: Record<string, LngLat> = {};
+        for (const row of data) {
+          map[row.postcode] = { lat: row.lat, lng: row.lng };
+        }
+        setPostcodeCoords(map);
+      });
+  }, [chainPostcodes]);
+
   const vehicles = useMemo(() => {
     const set = new Set<string>();
     runs.forEach((r) => {
@@ -352,19 +386,19 @@ export default function RunsPage() {
     return { groups: sorted, unassigned: noVehicle };
   }, [filtered, date]);
 
-  // Compute chained starts for multi-run vehicle groups
+  // Compute chained starts for multi-run vehicle groups (uses postcode coords for travel time)
   const chainedStarts = useMemo(() => {
     if (!vehicleGroups) return new Map<string, { chainedStartTime: string; chainedFromPostcode: string }>();
     const allChains = new Map<string, { chainedStartTime: string; chainedFromPostcode: string }>();
     for (const group of vehicleGroups.groups) {
       if (group.runs.length <= 1) continue;
-      const chains = computeChainedStarts(group.runs);
+      const chains = computeChainedStarts(group.runs, postcodeCoords);
       for (const [id, val] of chains) {
         allChains.set(id, val);
       }
     }
     return allChains;
-  }, [vehicleGroups]);
+  }, [vehicleGroups, postcodeCoords]);
 
   async function handleDelete(id: string) {
     if (!confirm("Are you sure you want to delete this run?")) return;

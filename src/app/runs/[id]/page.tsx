@@ -24,6 +24,7 @@ import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/l
 import { useNicknames } from "@/hooks/useNicknames";
 import { withNickname } from "@/lib/postcode-nicknames";
 import { generateEtaPdf } from "@/lib/generateEtaPdf";
+import { computeChainedStarts } from "@/lib/runDuration";
 import {
   DndContext,
   PointerSensor,
@@ -200,6 +201,9 @@ export default function RunDetailPage() {
   );
   const [etaChain, setEtaChain] = useState<EtaChainResult | null>(null);
 
+  // Chained start time (computed from sibling runs on same vehicle+date)
+  const [chainedStartTime, setChainedStartTime] = useState<string | null>(null);
+
   // Customer opening/closing times (fetched from DB)
   const [customerTimes, setCustomerTimes] = useState<{ open: string; close: string }>({ open: "08:00", close: "17:00" });
 
@@ -230,6 +234,34 @@ export default function RunDetailPage() {
         setRunLoading(false);
       });
   }, [runId]);
+
+  // Fetch sibling runs (same vehicle+date) to compute chained start time
+  useEffect(() => {
+    if (!run || !run.vehicle?.trim()) return;
+    const supabase = createClient();
+    supabase
+      .from("runs")
+      .select("*")
+      .eq("vehicle", run.vehicle.trim())
+      .eq("date", run.date)
+      .order("run_order", { ascending: true, nullsFirst: false })
+      .then(({ data }) => {
+        if (!data || data.length <= 1) return;
+        const siblings = data.map(rowToRun);
+        // Sort: by run_order first, then by start_time
+        siblings.sort((a, b) => {
+          if (a.runOrder != null && b.runOrder != null) return a.runOrder - b.runOrder;
+          if (a.runOrder != null) return -1;
+          if (b.runOrder != null) return 1;
+          return a.startTime.localeCompare(b.startTime);
+        });
+        const chains = computeChainedStarts(siblings);
+        const myChain = chains.get(run.id);
+        if (myChain && myChain.chainedStartTime !== run.startTime) {
+          setChainedStartTime(myChain.chainedStartTime);
+        }
+      });
+  }, [run?.id, run?.vehicle, run?.date]);
 
   // Periodically sync progress from DB to pick up cron-written completions
   useEffect(() => {
@@ -310,6 +342,28 @@ export default function RunDetailPage() {
       }
     }
     return refs;
+  }, [run]);
+
+  // Extract per-stop booking times from rawText lines (e.g. "B78 3HJ 14:30 REF:...")
+  // Falls back to run.collectionTime for the first stop (booking time from email)
+  const stopBookingTimes = useMemo(() => {
+    if (!run) return new Map<number, string>();
+    const times = new Map<number, string>();
+    const lines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    let stopIdx = 0;
+    for (const line of lines) {
+      const hasPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line);
+      if (hasPostcode) {
+        const timeMatch = line.match(/\b(\d{1,2}:\d{2})\b/);
+        if (timeMatch) times.set(stopIdx, timeMatch[1]);
+        stopIdx++;
+      }
+    }
+    // For single-stop runs, use collectionTime as booking time if not already parsed
+    if (!times.has(0) && run.collectionTime) {
+      times.set(0, run.collectionTime);
+    }
+    return times;
   }, [run]);
 
   const effectiveEnd = useMemo(() => {
@@ -432,7 +486,8 @@ export default function RunDetailPage() {
       if (isFutureRun || !vehicleSnap) {
         startPos = fromLL;
         const [y, mo, d] = currentRun.date.split("-").map(Number);
-        const [hh, mm] = (currentRun.startTime || "08:00").split(":").map(Number);
+        const effectiveStart = chainedStartTime || currentRun.startTime || "08:00";
+        const [hh, mm] = effectiveStart.split(":").map(Number);
         startAt = new Date(y, mo - 1, d, hh, mm, 0);
       } else {
         startPos = { lng: vehicleSnap.lng, lat: vehicleSnap.lat };
@@ -469,7 +524,7 @@ export default function RunDetailPage() {
     compute();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [run?.id, run?.startTime, run?.includeBreaks, run?.serviceMins, isFutureRun, vehicleSnap?.lat, vehicleSnap?.lng, coordsByPostcode, stops.join("|"), mapboxToken, customerTimes]);
+  }, [run?.id, run?.startTime, run?.includeBreaks, run?.serviceMins, isFutureRun, vehicleSnap?.lat, vehicleSnap?.lng, coordsByPostcode, stops.join("|"), mapboxToken, customerTimes, chainedStartTime]);
 
   // Build a map: stop index -> ETA label from the chain
   const stopEtaMap = useMemo(() => {
@@ -1047,7 +1102,7 @@ export default function RunDetailPage() {
             <button
               onClick={() => {
                 if (!run || !etaChain) return;
-                generateEtaPdf({ run, etaChain, stops, stopRefs, nicknames });
+                generateEtaPdf({ run, etaChain, stops, stopRefs, stopBookingTimes, nicknames });
               }}
               disabled={!etaChain}
               className="px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1140,9 +1195,12 @@ export default function RunDetailPage() {
                   <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
                 </>
               )}
+              {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
             </>
           )}{" "}
-          • Start {run.startTime} • Breaks {run.includeBreaks ? "On" : "Off"}
+          • Start {run.startTime}
+          {chainedStartTime && <span className="text-yellow-400"> (chained: {chainedStartTime})</span>}
+          {" "}• Breaks {run.includeBreaks ? "On" : "Off"}
         </div>
 
         {/* Live status card */}
@@ -1156,6 +1214,11 @@ export default function RunDetailPage() {
                   : "Uses assigned vehicle position (Webfleet) → next stop (Mapbox)"}
               </div>
 
+              {nextIdx != null && stopBookingTimes.has(nextIdx) && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-lg font-bold text-amber-300">Booking {stopBookingTimes.get(nextIdx)}</span>
+                </div>
+              )}
               {nextIdx != null && (
                 <div className="mt-3 text-sm text-gray-300">
                   Next Drop <span className="font-semibold text-white">{stops[nextIdx]}</span>
@@ -1403,7 +1466,10 @@ export default function RunDetailPage() {
                       <div>
                         <div className="font-semibold">
                           {withNickname(pc, nicknames)}
-                          {stopEtaMap[idx] && status !== "completed" && (
+                          {status !== "completed" && stopBookingTimes.has(idx) && (
+                            <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                          )}
+                          {status !== "completed" && !stopBookingTimes.has(idx) && stopEtaMap[idx] && (
                             <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
                           )}
                         </div>

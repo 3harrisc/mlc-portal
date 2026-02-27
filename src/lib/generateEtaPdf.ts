@@ -7,6 +7,7 @@ type PdfOptions = {
   etaChain: EtaChainResult;
   stops: string[]; // normalized postcodes
   stopRefs: Map<number, string>;
+  stopBookingTimes?: Map<number, string>;
   nicknames: Record<string, string>;
 };
 
@@ -27,7 +28,7 @@ function nick(postcode: string, nicknames: Record<string, string>): string {
   return n ? `${postcode} (${n})` : postcode;
 }
 
-export function generateEtaPdf({ run, etaChain, stops, stopRefs, nicknames }: PdfOptions) {
+export function generateEtaPdf({ run, etaChain, stops, stopRefs, stopBookingTimes, nicknames }: PdfOptions) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 15;
@@ -139,7 +140,8 @@ export function generateEtaPdf({ run, etaChain, stops, stopRefs, nicknames }: Pd
     }
 
     const postcode = stops[i];
-    const eta = stopEtas[i] || "";
+    const booking = stopBookingTimes?.get(i);
+    const eta = booking || stopEtas[i] || "";
     const ref = stopRefs.get(i) || "";
     const pcDisplay = nick(postcode, nicknames);
 

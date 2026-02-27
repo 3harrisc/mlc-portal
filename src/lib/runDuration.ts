@@ -2,11 +2,16 @@ import { parseStops } from "@/lib/postcode-utils";
 import type { PlannedRun } from "@/types/runs";
 import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
 import { MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS } from "@/lib/constants";
+import { haversineKm, type LngLat } from "@/lib/geo-utils";
 
 /** Avg drive time between two postcodes (rough estimate, no API call) */
 const AVG_DRIVE_PER_STOP = 20; // mins
-/** Avg travel time between two different locations (for inter-run travel) */
+/** Fallback travel time when coords are unavailable */
 const AVG_INTER_RUN_TRAVEL = 30; // mins
+/** HGV average speed in kph for inter-run travel estimate */
+const HGV_AVG_SPEED_KPH = 60;
+/** Road winding factor — straight-line distance × this = estimated road distance */
+const ROAD_FACTOR = 1.3;
 
 /**
  * Rough estimate of a run's finish time based on stop count + service time.
@@ -44,12 +49,32 @@ export function estimateFinishTime(run: PlannedRun): {
   return { finishTime: minutesToTime(finishMins), finishMins, lastPostcode };
 }
 
+/** Estimate travel time (mins) between two postcodes using cached coordinates */
+function estimateTravelMins(
+  fromPc: string,
+  toPc: string,
+  coords: Record<string, LngLat>
+): number {
+  if (fromPc === toPc) return 0;
+
+  const from = coords[fromPc.toUpperCase().replace(/\s/g, "")];
+  const to = coords[toPc.toUpperCase().replace(/\s/g, "")];
+
+  if (!from || !to) return AVG_INTER_RUN_TRAVEL; // fallback if coords missing
+
+  const straightLineKm = haversineKm(from, to);
+  const roadKm = straightLineKm * ROAD_FACTOR;
+  return Math.round((roadKm / HGV_AVG_SPEED_KPH) * 60);
+}
+
 /**
  * Compute chained start times for an ordered group of runs on the same vehicle+date.
  * Accounts for: previous run finish + service time + travel to next collection point.
+ * When coords are provided, uses haversine distance for inter-run travel estimates.
  */
 export function computeChainedStarts(
-  runs: PlannedRun[]
+  runs: PlannedRun[],
+  coords: Record<string, LngLat> = {}
 ): Map<string, { chainedStartTime: string; chainedFromPostcode: string }> {
   const result = new Map<string, { chainedStartTime: string; chainedFromPostcode: string }>();
 
@@ -82,9 +107,9 @@ export function computeChainedStarts(
         ? prev.fromPostcode
         : (prevStops[prevStops.length - 1] || prev.fromPostcode);
 
-      // Add travel time from previous run's last stop to this run's collection point
+      // Estimate travel time from last stop to next collection using coords
       const nextFromPc = runs[i].fromPostcode;
-      const travelToNext = prevLastPc === nextFromPc ? 0 : AVG_INTER_RUN_TRAVEL;
+      const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
 
       const chainedStart = prevFinishMins + travelToNext;
       const configuredStart = timeToMinutes(runs[i].startTime) ?? 480;

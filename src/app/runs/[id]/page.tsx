@@ -185,6 +185,7 @@ export default function RunDetailPage() {
 
   const [run, setRun] = useState<PlannedRun | null>(null);
   const [runLoading, setRunLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
 
   const [vehicleSnap, setVehicleSnap] = useState<VehicleSnapshot | null>(null);
   const [vehicleError, setVehicleError] = useState<string>("");
@@ -375,14 +376,22 @@ export default function RunDetailPage() {
   }, [run, stops]);
 
   /** Persist run field changes to Supabase (admin only) */
-  function persist(updated: PlannedRun) {
+  function persist(updated: PlannedRun, extraFields?: Record<string, any>) {
     if (!isAdmin) return;
     setRun(updated);
-    // Fire-and-forget server action — only send fields that exist
     const fields: Record<string, any> = {
       date: updated.date,
       vehicle: updated.vehicle,
       loadRef: updated.loadRef,
+      startTime: updated.startTime,
+      serviceMins: updated.serviceMins,
+      includeBreaks: updated.includeBreaks,
+      fromPostcode: updated.fromPostcode,
+      toPostcode: updated.toPostcode,
+      returnToBase: updated.returnToBase,
+      customer: updated.customer,
+      collectionTime: updated.collectionTime ?? null,
+      ...extraFields,
     };
     if (updated.collectionDate) fields.collectionDate = updated.collectionDate;
     updateRunAction(updated.id, fields);
@@ -1099,6 +1108,18 @@ export default function RunDetailPage() {
           </a>
 
           <div className="flex items-center gap-4">
+            {isAdmin && (
+              <button
+                onClick={() => setEditing((v) => !v)}
+                className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                  editing
+                    ? "border-emerald-400/30 text-emerald-400 bg-emerald-400/10"
+                    : "border-white/15 text-gray-300 hover:bg-white/10"
+                }`}
+              >
+                {editing ? "Done editing" : "Edit run"}
+              </button>
+            )}
             <button
               onClick={() => {
                 if (!run || !etaChain) return;
@@ -1163,45 +1184,126 @@ export default function RunDetailPage() {
           )}
         </div>
 
-        <div className="text-sm text-gray-400 mt-2">
-          {run.runType === "backload" ? (
-            <>
-              Collection: <span className="text-gray-200 font-semibold">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span>
-              {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
-              {" "}• End at last delivery
-              {run.collectionDate && run.collectionDate !== run.date && (
-                <span className="text-cyan-400"> • Collect {run.collectionDate} → Deliver {run.date}</span>
-              )}
-              {isAdmin && (
-                <span className="ml-2">
-                  • Collection date:{" "}
-                  <input
-                    type="date"
-                    value={run.collectionDate || ""}
-                    onChange={(e) => persist({ ...run, collectionDate: e.target.value || undefined })}
-                    className="bg-transparent border-b border-white/20 focus:border-blue-400 outline-none text-cyan-400 text-sm w-[9ch] cursor-pointer"
-                  />
-                </span>
-              )}
-            </>
-          ) : (
-            <>
-              From {withNickname(normalizePostcode(run.fromPostcode), nicknames)} •{" "}
-              {run.returnToBase ? (
-                <>Return to base</>
-              ) : (
-                <>
-                  To{" "}
-                  <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
-                </>
-              )}
-              {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
-            </>
-          )}{" "}
-          • Start {run.startTime}
-          {chainedStartTime && <span className="text-yellow-400"> (chained: {chainedStartTime})</span>}
-          {" "}• Breaks {run.includeBreaks ? "On" : "Off"}
-        </div>
+        {editing ? (
+          <div className="mt-3 border border-white/10 rounded-xl p-4 bg-white/5 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <label className="block text-gray-500 mb-1">Customer</label>
+              <input
+                value={run.customer}
+                onChange={(e) => persist({ ...run, customer: e.target.value })}
+                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-500 mb-1">From postcode</label>
+              <input
+                value={run.fromPostcode}
+                onChange={(e) => persist({ ...run, fromPostcode: e.target.value.toUpperCase() })}
+                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-500 mb-1">Start time</label>
+              <input
+                type="time"
+                value={run.startTime}
+                onChange={(e) => persist({ ...run, startTime: e.target.value })}
+                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-500 mb-1">Booking time</label>
+              <input
+                type="time"
+                value={run.collectionTime || ""}
+                onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
+                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-500 mb-1">Service (mins)</label>
+              <input
+                type="number"
+                value={run.serviceMins}
+                onChange={(e) => persist({ ...run, serviceMins: Number(e.target.value) || 0 })}
+                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-500 mb-1">Run type</label>
+              <select
+                value={run.runType}
+                onChange={(e) => persist({ ...run, runType: e.target.value as "regular" | "backload" })}
+                className="w-full bg-black border border-white/15 rounded-lg px-3 py-1.5 text-white"
+              >
+                <option value="regular">Regular</option>
+                <option value="backload">Backload</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={run.returnToBase}
+                  onChange={(e) => persist({ ...run, returnToBase: e.target.checked })}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                <span className="text-gray-300">Return to base</span>
+              </label>
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={run.includeBreaks}
+                  onChange={(e) => persist({ ...run, includeBreaks: e.target.checked })}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                <span className="text-gray-300">Include breaks</span>
+              </label>
+            </div>
+            {run.runType === "backload" && (
+              <div>
+                <label className="block text-gray-500 mb-1">Collection date</label>
+                <input
+                  type="date"
+                  value={run.collectionDate || ""}
+                  onChange={(e) => persist({ ...run, collectionDate: e.target.value || undefined })}
+                  className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-sm text-gray-400 mt-2">
+            {run.runType === "backload" ? (
+              <>
+                Collection: <span className="text-gray-200 font-semibold">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span>
+                {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
+                {" "}• End at last delivery
+                {run.collectionDate && run.collectionDate !== run.date && (
+                  <span className="text-cyan-400"> • Collect {run.collectionDate} → Deliver {run.date}</span>
+                )}
+              </>
+            ) : (
+              <>
+                From {withNickname(normalizePostcode(run.fromPostcode), nicknames)} •{" "}
+                {run.returnToBase ? (
+                  <>Return to base</>
+                ) : (
+                  <>
+                    To{" "}
+                    <span className="text-gray-200 font-semibold">{effectiveEnd ? withNickname(normalizePostcode(effectiveEnd), nicknames) : "(not set)"}</span>
+                  </>
+                )}
+                {run.collectionTime && <> • Booking: <span className="text-gray-200 font-semibold">{run.collectionTime}</span></>}
+              </>
+            )}{" "}
+            • Start {run.startTime}
+            {chainedStartTime && <span className="text-yellow-400"> (chained: {chainedStartTime})</span>}
+            {" "}• Breaks {run.includeBreaks ? "On" : "Off"}
+          </div>
+        )}
 
         {/* Live status card */}
         <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">

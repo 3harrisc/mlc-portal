@@ -37,6 +37,13 @@ export async function updateRun(
     runOrder: number | null;
     collectionTime: string | null;
     collectionDate: string | null;
+    startTime: string;
+    serviceMins: number;
+    includeBreaks: boolean;
+    fromPostcode: string;
+    toPostcode: string;
+    returnToBase: boolean;
+    customer: string;
   }>
 ) {
   const { supabase } = await getUser();
@@ -54,6 +61,13 @@ export async function updateRun(
   if (fields.runOrder !== undefined) row.run_order = fields.runOrder;
   if (fields.collectionTime !== undefined) row.collection_time = fields.collectionTime;
   if (fields.collectionDate !== undefined) row.collection_date = fields.collectionDate;
+  if (fields.startTime !== undefined) row.start_time = fields.startTime;
+  if (fields.serviceMins !== undefined) row.service_mins = fields.serviceMins;
+  if (fields.includeBreaks !== undefined) row.include_breaks = fields.includeBreaks;
+  if (fields.fromPostcode !== undefined) row.from_postcode = fields.fromPostcode;
+  if (fields.toPostcode !== undefined) row.to_postcode = fields.toPostcode;
+  if (fields.returnToBase !== undefined) row.return_to_base = fields.returnToBase;
+  if (fields.customer !== undefined) row.customer = fields.customer;
 
   const { error } = await supabase.from("runs").update(row).eq("id", id);
   if (error) return { error: error.message };

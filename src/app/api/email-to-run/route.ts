@@ -400,9 +400,14 @@ export async function POST(req: Request) {
       }
     }
     // Apply shared date to runs that defaulted to today or have no date
+    // For backloads, only align if shared date is today or future — don't pull into past
     for (const r of parsedRuns) {
       if (!r.date || r.date === today) {
-        r.date = sharedDate;
+        if (r.type === "backload" && sharedDate < today) {
+          r.date = today;
+        } else {
+          r.date = sharedDate;
+        }
       }
     }
 

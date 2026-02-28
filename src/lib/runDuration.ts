@@ -111,9 +111,7 @@ export function computeChainedStarts(
       const nextFromPc = runs[i].fromPostcode;
       const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
 
-      const chainedStart = prevFinishMins + travelToNext;
-      const configuredStart = timeToMinutes(runs[i].startTime) ?? 480;
-      const effectiveStart = Math.max(configuredStart, chainedStart);
+      const effectiveStart = prevFinishMins + travelToNext;
 
       result.set(runs[i].id, {
         chainedStartTime: minutesToTime(effectiveStart),

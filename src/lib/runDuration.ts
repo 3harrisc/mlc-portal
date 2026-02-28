@@ -68,8 +68,50 @@ function estimateTravelMins(
 }
 
 /**
+ * Compute a run's finish time in minutes.
+ * If the run has a booking time (collectionTime), that IS the arrival at the first stop —
+ * so finish = booking time + service + return, skipping drive-time calculation.
+ * Otherwise falls back to start + drive + service + breaks + return.
+ */
+function runFinishMins(run: PlannedRun, startMins: number): {
+  finishMins: number;
+  lastPostcode: string;
+} {
+  const stops = parseStops(run.rawText);
+  if (!stops.length) {
+    return { finishMins: startMins, lastPostcode: run.fromPostcode };
+  }
+
+  const bookingMins = run.collectionTime ? timeToMinutes(run.collectionTime) : null;
+
+  let finishMins: number;
+  if (bookingMins != null) {
+    // Booking time = arrival at first stop. Service at each stop, then optional return.
+    const serviceTotal = stops.length * run.serviceMins;
+    const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
+    finishMins = bookingMins + serviceTotal + returnLeg;
+  } else {
+    // No booking time — estimate from start + drive + service + breaks + return
+    const totalDrive = stops.length * AVG_DRIVE_PER_STOP;
+    const totalService = stops.length * run.serviceMins;
+    let breakMins = 0;
+    if (run.includeBreaks && totalDrive > MAX_DRIVE_BEFORE_BREAK_MINS) {
+      breakMins = Math.floor(totalDrive / MAX_DRIVE_BEFORE_BREAK_MINS) * BREAK_MINS;
+    }
+    const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
+    finishMins = startMins + totalDrive + totalService + breakMins + returnLeg;
+  }
+
+  const lastPostcode = run.returnToBase
+    ? run.fromPostcode
+    : (stops[stops.length - 1] || run.fromPostcode);
+
+  return { finishMins, lastPostcode };
+}
+
+/**
  * Compute chained start times for an ordered group of runs on the same vehicle+date.
- * Accounts for: previous run finish + service time + travel to next collection point.
+ * Uses booking times (collectionTime) as arrival at destination when available.
  * When coords are provided, uses haversine distance for inter-run travel estimates.
  */
 export function computeChainedStarts(
@@ -86,26 +128,13 @@ export function computeChainedStarts(
       });
     } else {
       const prev = runs[i - 1];
-      // Use chained start time for previous run if available (cascading chain)
       const prevChained = result.get(prev.id);
       const prevStartMins = prevChained
         ? (timeToMinutes(prevChained.chainedStartTime) ?? 480)
         : (timeToMinutes(prev.startTime) ?? 480);
 
-      // Recalculate previous run duration from its chained start
-      const prevStops = parseStops(prev.rawText);
-      const prevDrive = prevStops.length * AVG_DRIVE_PER_STOP;
-      const prevService = prevStops.length * prev.serviceMins;
-      let prevBreaks = 0;
-      if (prev.includeBreaks && prevDrive > MAX_DRIVE_BEFORE_BREAK_MINS) {
-        prevBreaks = Math.floor(prevDrive / MAX_DRIVE_BEFORE_BREAK_MINS) * BREAK_MINS;
-      }
-      const prevReturn = prev.returnToBase ? AVG_DRIVE_PER_STOP : 0;
-      const prevFinishMins = prevStartMins + prevDrive + prevService + prevBreaks + prevReturn;
-
-      const prevLastPc = prev.returnToBase
-        ? prev.fromPostcode
-        : (prevStops[prevStops.length - 1] || prev.fromPostcode);
+      const { finishMins: prevFinishMins, lastPostcode: prevLastPc } =
+        runFinishMins(prev, prevStartMins);
 
       // Estimate travel time from last stop to next collection using coords
       const nextFromPc = runs[i].fromPostcode;

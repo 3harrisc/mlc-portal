@@ -529,7 +529,7 @@ export async function POST(req: Request) {
         toPostcode: fromPc,
         returnToBase: false,
         startTime,
-        serviceMins: 25,
+        serviceMins: customerName.toLowerCase().includes("consolid8") ? 60 : 25,
         includeBreaks: true,
         rawText: postcodeLines.join("\n"),
         completedStopIndexes: [],

@@ -121,11 +121,23 @@ export function computeChainedStarts(
   const result = new Map<string, { chainedStartTime: string; chainedFromPostcode: string }>();
 
   for (let i = 0; i < runs.length; i++) {
+    const cur = runs[i];
+    const curBookingMins = cur.collectionTime ? timeToMinutes(cur.collectionTime) : null;
+
     if (i === 0) {
-      result.set(runs[i].id, {
-        chainedStartTime: runs[i].startTime,
-        chainedFromPostcode: runs[i].fromPostcode,
-      });
+      // First run: if it has a booking time, use that as the effective start
+      // (the driver will arrive at the first delivery at the booking time)
+      if (curBookingMins != null) {
+        result.set(cur.id, {
+          chainedStartTime: cur.collectionTime!,
+          chainedFromPostcode: cur.fromPostcode,
+        });
+      } else {
+        result.set(cur.id, {
+          chainedStartTime: cur.startTime,
+          chainedFromPostcode: cur.fromPostcode,
+        });
+      }
     } else {
       const prev = runs[i - 1];
       const prevChained = result.get(prev.id);
@@ -136,16 +148,24 @@ export function computeChainedStarts(
       const { finishMins: prevFinishMins, lastPostcode: prevLastPc } =
         runFinishMins(prev, prevStartMins);
 
-      // Estimate travel time from last stop to next collection using coords
-      const nextFromPc = runs[i].fromPostcode;
-      const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
+      if (curBookingMins != null) {
+        // This run has a booking time — the driver WILL be at the first delivery
+        // at the booking time, regardless of what the previous run's finish says.
+        result.set(cur.id, {
+          chainedStartTime: cur.collectionTime!,
+          chainedFromPostcode: prevLastPc,
+        });
+      } else {
+        // No booking time — chain from previous run's finish + travel
+        const nextFromPc = cur.fromPostcode;
+        const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
+        const effectiveStart = prevFinishMins + travelToNext;
 
-      const effectiveStart = prevFinishMins + travelToNext;
-
-      result.set(runs[i].id, {
-        chainedStartTime: minutesToTime(effectiveStart),
-        chainedFromPostcode: prevLastPc,
-      });
+        result.set(cur.id, {
+          chainedStartTime: minutesToTime(effectiveStart),
+          chainedFromPostcode: prevLastPc,
+        });
+      }
     }
   }
 

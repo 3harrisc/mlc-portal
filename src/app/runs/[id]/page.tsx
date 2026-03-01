@@ -493,11 +493,21 @@ export default function RunDetailPage() {
       let startAt: Date;
 
       if (isFutureRun || !vehicleSnap) {
-        startPos = fromLL;
         const [y, mo, d] = currentRun.date.split("-").map(Number);
-        const effectiveStart = chainedStartTime || currentRun.startTime || "08:00";
-        const [hh, mm] = effectiveStart.split(":").map(Number);
-        startAt = new Date(y, mo - 1, d, hh, mm, 0);
+
+        // If this run has a booking time, start the ETA chain from the first
+        // stop's position at the booking time (driver arrives there at that time)
+        if (currentRun.collectionTime && remaining.length > 0) {
+          const firstStopCoord = coordsByPostcode[remaining[0].pc];
+          startPos = firstStopCoord || fromLL;
+          const [hh, mm] = currentRun.collectionTime.split(":").map(Number);
+          startAt = new Date(y, mo - 1, d, hh, mm, 0);
+        } else {
+          startPos = fromLL;
+          const effectiveStart = chainedStartTime || currentRun.startTime || "08:00";
+          const [hh, mm] = effectiveStart.split(":").map(Number);
+          startAt = new Date(y, mo - 1, d, hh, mm, 0);
+        }
       } else {
         startPos = { lng: vehicleSnap.lng, lat: vehicleSnap.lat };
         startAt = new Date();

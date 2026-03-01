@@ -1316,6 +1316,29 @@ export default function RunDetailPage() {
                   : "Uses assigned vehicle position (Webfleet) → next stop (Mapbox)"}
               </div>
 
+              {/* Backload phase indicator */}
+              {run.runType === "backload" && nextIdx != null && (
+                <div className="mt-2">
+                  {(progress?.completedIdx ?? []).length === 0 ? (
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-xs font-semibold">
+                        ETA to collection site
+                      </span>
+                      <span className="text-sm text-gray-300">
+                        {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
+                      </span>
+                      {run.collectionTime && (
+                        <span className="text-sm text-amber-300 font-semibold">Booking {run.collectionTime}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-semibold">
+                      ETA to delivery site
+                    </span>
+                  )}
+                </div>
+              )}
+
               {nextIdx != null && stopBookingTimes.has(nextIdx) && (
                 <div className="mt-2 flex items-center gap-2">
                   <span className="text-lg font-bold text-amber-300">Booking {stopBookingTimes.get(nextIdx)}</span>
@@ -1323,7 +1346,12 @@ export default function RunDetailPage() {
               )}
               {nextIdx != null && (
                 <div className="mt-3 text-sm text-gray-300">
-                  Next Drop <span className="font-semibold text-white">{stops[nextIdx]}</span>
+                  {run.runType === "backload" && (progress?.completedIdx ?? []).length === 0
+                    ? <>Collection <span className="font-semibold text-white">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span> → </>
+                    : null
+                  }
+                  Next {run.runType === "backload" ? "Delivery" : "Drop"}{" "}
+                  <span className="font-semibold text-white">{withNickname(stops[nextIdx], nicknames)}</span>
                   {stopEtaMap[nextIdx] && (
                     <span className="ml-2 text-blue-300 font-semibold">ETA {stopEtaMap[nextIdx]}</span>
                   )}

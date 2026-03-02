@@ -339,16 +339,6 @@ export async function GET(req: Request) {
           minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
         ) {
           if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
-
-          // Backfill: if we're at stop N but earlier stops are incomplete,
-          // they must have been visited (sequential delivery route) — auto-complete them
-          for (const earlierIdx of uncompletedIdxs) {
-            if (earlierIdx >= nsi) break;
-            if (!p.completedIdx.includes(earlierIdx)) {
-              p.completedIdx.push(earlierIdx);
-            }
-          }
-
           p.completedIdx.sort((a, b) => a - b);
         }
       } else {
@@ -362,15 +352,6 @@ export async function GET(req: Request) {
             minutesBetween(arrivedMs, nowMs) >= MIN_STANDSTILL_MINS
           ) {
             if (!p.completedIdx.includes(trackedIdx)) p.completedIdx.push(trackedIdx);
-
-            // Backfill earlier stops
-            for (const earlierIdx of uncompletedIdxs) {
-              if (earlierIdx >= trackedIdx) break;
-              if (!p.completedIdx.includes(earlierIdx)) {
-                p.completedIdx.push(earlierIdx);
-              }
-            }
-
             p.completedIdx.sort((a, b) => a - b);
           }
 

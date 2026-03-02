@@ -231,17 +231,23 @@ export async function GET(req: Request) {
         completedIdx: [...(current.completedIdx ?? [])],
       };
 
-      const nsi = nextStopIndex(stops, p.completedIdx);
+      const vehicleLL: LngLat = { lng: pos.lng, lat: pos.lat };
+      const nowMs = Date.now();
+
+      // ── Find ALL uncompleted stops and check proximity to each ──
+      const uncompletedIdxs: number[] = [];
+      for (let i = 0; i < stops.length; i++) {
+        if (!p.completedIdx.includes(i)) uncompletedIdxs.push(i);
+      }
 
       // All stops completed — but check if we still need to detect departure
       // from the last completed stop
-      if (nsi == null) {
+      if (!uncompletedIdxs.length) {
         if (p.onSiteIdx != null) {
           const trackedPc = normalizePostcode(stops[p.onSiteIdx]);
           const trackedLL = coordsMap.get(trackedPc);
-          const vehicleLLCheck: LngLat = { lng: pos.lng, lat: pos.lat };
           const nearTracked = trackedLL
-            ? haversineMeters(vehicleLLCheck, trackedLL) <= COMPLETION_RADIUS_METERS
+            ? haversineMeters(vehicleLL, trackedLL) <= COMPLETION_RADIUS_METERS
             : false;
 
           if (!nearTracked) {
@@ -271,17 +277,23 @@ export async function GET(req: Request) {
         continue;
       }
 
-      const nextPc = normalizePostcode(stops[nsi]);
-      const nextLL = coordsMap.get(nextPc);
-      if (!nextLL) {
-        results.push({ runId: run.id, vehicle: run.vehicle, status: "no_coords" });
-        continue;
+      // Find the closest uncompleted stop the vehicle is inside
+      let insideIdx: number | null = null;
+      let insideDist = Infinity;
+      for (const idx of uncompletedIdxs) {
+        const pc = normalizePostcode(stops[idx]);
+        const ll = coordsMap.get(pc);
+        if (!ll) continue;
+        const dist = haversineMeters(vehicleLL, ll);
+        if (dist <= COMPLETION_RADIUS_METERS && dist < insideDist) {
+          insideIdx = idx;
+          insideDist = dist;
+        }
       }
 
-      const vehicleLL: LngLat = { lng: pos.lng, lat: pos.lat };
-      const distM = haversineMeters(vehicleLL, nextLL);
-      const inside = distM <= COMPLETION_RADIUS_METERS;
-      const nowMs = Date.now();
+      const inside = insideIdx != null;
+      // The target stop index: whichever uncompleted stop we're near, or the first uncompleted
+      const nsi = insideIdx ?? uncompletedIdxs[0];
 
       // ── Proximity / dwell logic ──
       // Completion = within radius for >= MIN_STANDSTILL_MINS (speed irrelevant).
@@ -311,7 +323,7 @@ export async function GET(req: Request) {
         // else: still near the completed stop — keep tracking
       }
 
-      // 2. Handle the next uncompleted stop
+      // 2. Handle the target stop (closest uncompleted stop within radius, or first uncompleted)
       if (inside) {
         if (p.onSiteIdx !== nsi) {
           // Just arrived at this stop
@@ -327,23 +339,43 @@ export async function GET(req: Request) {
           minutesBetween(p.onSiteSinceMs, nowMs) >= MIN_STANDSTILL_MINS
         ) {
           if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
+
+          // Backfill: if we're at stop N but earlier stops are incomplete,
+          // they must have been visited (sequential delivery route) — auto-complete them
+          for (const earlierIdx of uncompletedIdxs) {
+            if (earlierIdx >= nsi) break;
+            if (!p.completedIdx.includes(earlierIdx)) {
+              p.completedIdx.push(earlierIdx);
+            }
+          }
+
           p.completedIdx.sort((a, b) => a - b);
         }
       } else {
-        // Vehicle is NOT inside the next stop's radius
-        if (p.onSiteIdx === nsi) {
-          // Was tracking this stop, now left
+        // Vehicle is NOT inside any uncompleted stop's radius
+        if (p.onSiteIdx != null && uncompletedIdxs.includes(p.onSiteIdx)) {
+          // Was tracking an uncompleted stop, now left
+          const trackedIdx = p.onSiteIdx;
           const arrivedMs = p.onSiteSinceMs;
           if (
             arrivedMs != null &&
             minutesBetween(arrivedMs, nowMs) >= MIN_STANDSTILL_MINS
           ) {
-            if (!p.completedIdx.includes(nsi)) p.completedIdx.push(nsi);
+            if (!p.completedIdx.includes(trackedIdx)) p.completedIdx.push(trackedIdx);
+
+            // Backfill earlier stops
+            for (const earlierIdx of uncompletedIdxs) {
+              if (earlierIdx >= trackedIdx) break;
+              if (!p.completedIdx.includes(earlierIdx)) {
+                p.completedIdx.push(earlierIdx);
+              }
+            }
+
             p.completedIdx.sort((a, b) => a - b);
           }
 
-          if (p.completedIdx.includes(nsi)) {
-            departureIdx = nsi;
+          if (p.completedIdx.includes(trackedIdx)) {
+            departureIdx = trackedIdx;
             departureArrivedMs = arrivedMs;
           }
 

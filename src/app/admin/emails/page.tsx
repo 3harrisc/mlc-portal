@@ -7,12 +7,35 @@ import { useAuth } from "@/components/AuthProvider";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
+type ParsedRunData = {
+  name?: string;
+  type?: string;
+  customer?: string;
+  date?: string;
+  destination?: string;
+  destinationPostcode?: string;
+  fromLocation?: string;
+  fromPostcode?: string;
+  deliveryPostcodes?: { postcode: string; time?: string; ref?: string }[];
+  vehicle?: string;
+  loadRef?: string;
+  collectionRef?: string;
+  deliveryTime?: string;
+  collectionTime?: string;
+  price?: string;
+  notes?: string;
+  // legacy single-run fields
+  postcodes?: { postcode: string; time?: string }[];
+};
+
 type EmailLog = {
   id: string;
   from_address: string | null;
   subject: string | null;
   body: string | null;
   parsed_data: {
+    runs?: ParsedRunData[];
+    // legacy single-run fields
     customer?: string;
     date?: string;
     postcodes?: { postcode: string; time?: string }[];
@@ -139,6 +162,8 @@ export default function AdminEmailsPage() {
                       ? "border-emerald-500/30 bg-emerald-500/5"
                       : isError
                       ? "border-red-500/30 bg-red-500/5"
+                      : log.status === "partial"
+                      ? "border-amber-500/30 bg-amber-500/5"
                       : "border-white/10 bg-white/5"
                   }`}
                 >
@@ -172,25 +197,36 @@ export default function AdminEmailsPage() {
                           {log.subject || "(no subject)"}
                         </div>
 
-                        {isSuccess && parsed && (
+                        {(isSuccess || log.status === "partial") && parsed && (
                           <div className="text-xs text-gray-400 mt-1">
-                            {parsed.customer && (
-                              <span>{parsed.customer} &middot; </span>
-                            )}
-                            {parsed.postcodes && (
+                            {parsed.runs && parsed.runs.length > 0 ? (
                               <span>
-                                {parsed.postcodes.length} stop
-                                {parsed.postcodes.length !== 1 ? "s" : ""}{" "}
-                                &middot;{" "}
+                                {parsed.runs.length} run{parsed.runs.length !== 1 ? "s" : ""}
+                                {" "}&middot;{" "}
+                                {parsed.runs[0].customer || "Unknown"}{" "}
+                                {parsed.runs[0].date ? `&middot; ${parsed.runs[0].date}` : ""}
                               </span>
-                            )}
-                            {parsed.vehicle && (
-                              <span>Vehicle: {parsed.vehicle}</span>
+                            ) : (
+                              <>
+                                {parsed.customer && (
+                                  <span>{parsed.customer} &middot; </span>
+                                )}
+                                {parsed.postcodes && (
+                                  <span>
+                                    {parsed.postcodes.length} stop
+                                    {parsed.postcodes.length !== 1 ? "s" : ""}{" "}
+                                    &middot;{" "}
+                                  </span>
+                                )}
+                                {parsed.vehicle && (
+                                  <span>Vehicle: {parsed.vehicle}</span>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
 
-                        {isError && log.error && (
+                        {(isError || log.status === "partial") && log.error && (
                           <div className="text-xs text-red-400 mt-1">
                             {log.error}
                           </div>
@@ -198,7 +234,7 @@ export default function AdminEmailsPage() {
                       </div>
 
                       <div className="shrink-0 flex items-center gap-2">
-                        {isSuccess && log.run_id && (
+                        {(isSuccess || log.status === "partial") && log.run_id && (
                           <Link
                             href={`/runs/${log.run_id}`}
                             onClick={(e) => e.stopPropagation()}
@@ -213,6 +249,8 @@ export default function AdminEmailsPage() {
                               ? "bg-emerald-400/10 text-emerald-400"
                               : isError
                               ? "bg-red-400/10 text-red-400"
+                              : log.status === "partial"
+                              ? "bg-amber-400/10 text-amber-400"
                               : "bg-gray-400/10 text-gray-400"
                           }`}
                         >
@@ -220,6 +258,8 @@ export default function AdminEmailsPage() {
                             ? "Created"
                             : isError
                             ? "Error"
+                            : log.status === "partial"
+                            ? "Partial"
                             : log.status}
                         </span>
                       </div>
@@ -235,47 +275,147 @@ export default function AdminEmailsPage() {
                           <div className="text-xs text-gray-400 font-semibold mb-1">
                             PARSED DATA
                           </div>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                              <span className="text-gray-500">Customer:</span>{" "}
-                              {parsed.customer || "—"}
+                          {parsed.runs && parsed.runs.length > 0 ? (
+                            <div className="space-y-3">
+                              {parsed.runs.map((r, idx) => {
+                                const pcs = r.deliveryPostcodes || r.postcodes || [];
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="border border-white/10 rounded-lg p-2.5"
+                                  >
+                                    <div className="flex items-center gap-2 mb-1.5">
+                                      <span className="text-xs font-semibold">
+                                        {r.name || `Run ${idx + 1}`}
+                                      </span>
+                                      {r.type && (
+                                        <span
+                                          className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                            r.type === "backload"
+                                              ? "bg-amber-400/10 text-amber-400"
+                                              : "bg-blue-400/10 text-blue-400"
+                                          }`}
+                                        >
+                                          {r.type}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-1.5 text-xs">
+                                      <div>
+                                        <span className="text-gray-500">Customer:</span>{" "}
+                                        {r.customer || "—"}
+                                      </div>
+                                      <div>
+                                        <span className="text-gray-500">Date:</span>{" "}
+                                        {r.date || "—"}
+                                      </div>
+                                      {r.destination && (
+                                        <div>
+                                          <span className="text-gray-500">Dest:</span>{" "}
+                                          {r.destination}
+                                          {r.destinationPostcode ? ` (${r.destinationPostcode})` : ""}
+                                        </div>
+                                      )}
+                                      {r.fromLocation && (
+                                        <div>
+                                          <span className="text-gray-500">From:</span>{" "}
+                                          {r.fromLocation}
+                                          {r.fromPostcode ? ` (${r.fromPostcode})` : ""}
+                                        </div>
+                                      )}
+                                      {(r.loadRef || r.collectionRef) && (
+                                        <div>
+                                          <span className="text-gray-500">Ref:</span>{" "}
+                                          {[r.loadRef, r.collectionRef].filter(Boolean).join(" / ")}
+                                        </div>
+                                      )}
+                                      {(r.deliveryTime || r.collectionTime) && (
+                                        <div>
+                                          <span className="text-gray-500">Time:</span>{" "}
+                                          {r.deliveryTime || r.collectionTime}
+                                        </div>
+                                      )}
+                                      {r.vehicle && (
+                                        <div>
+                                          <span className="text-gray-500">Vehicle:</span>{" "}
+                                          {r.vehicle}
+                                        </div>
+                                      )}
+                                      {r.price && (
+                                        <div>
+                                          <span className="text-gray-500">Price:</span>{" "}
+                                          {r.price}
+                                        </div>
+                                      )}
+                                    </div>
+                                    {pcs.length > 0 && (
+                                      <div className="mt-1.5">
+                                        <span className="text-xs text-gray-500">Stops:</span>
+                                        <div className="text-xs font-mono text-gray-300 mt-0.5">
+                                          {pcs.map((p, i) => (
+                                            <span key={i}>
+                                              {p.postcode}
+                                              {p.time ? ` ${p.time}` : ""}
+                                              {i < pcs.length - 1 ? " → " : ""}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {r.notes && (
+                                      <div className="mt-1 text-xs text-gray-400">
+                                        Notes: {r.notes}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
-                            <div>
-                              <span className="text-gray-500">Date:</span>{" "}
-                              {parsed.date || "—"}
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Vehicle:</span>{" "}
-                              {parsed.vehicle || "—"}
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Ref:</span>{" "}
-                              {parsed.loadRef || "—"}
-                            </div>
-                          </div>
-                          {parsed.postcodes &&
-                            parsed.postcodes.length > 0 && (
-                              <div className="mt-2">
-                                <span className="text-xs text-gray-500">
-                                  Postcodes:
-                                </span>
-                                <div className="text-xs font-mono text-gray-300 mt-0.5">
-                                  {parsed.postcodes.map((p, i) => (
-                                    <span key={i}>
-                                      {p.postcode}
-                                      {p.time ? ` ${p.time}` : ""}
-                                      {i < parsed.postcodes!.length - 1
-                                        ? " → "
-                                        : ""}
-                                    </span>
-                                  ))}
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                  <span className="text-gray-500">Customer:</span>{" "}
+                                  {parsed.customer || "—"}
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Date:</span>{" "}
+                                  {parsed.date || "—"}
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Vehicle:</span>{" "}
+                                  {parsed.vehicle || "—"}
+                                </div>
+                                <div>
+                                  <span className="text-gray-500">Ref:</span>{" "}
+                                  {parsed.loadRef || "—"}
                                 </div>
                               </div>
-                            )}
-                          {parsed.notes && (
-                            <div className="mt-1 text-xs text-gray-400">
-                              Notes: {parsed.notes}
-                            </div>
+                              {parsed.postcodes &&
+                                parsed.postcodes.length > 0 && (
+                                  <div className="mt-2">
+                                    <span className="text-xs text-gray-500">
+                                      Postcodes:
+                                    </span>
+                                    <div className="text-xs font-mono text-gray-300 mt-0.5">
+                                      {parsed.postcodes.map((p, i) => (
+                                        <span key={i}>
+                                          {p.postcode}
+                                          {p.time ? ` ${p.time}` : ""}
+                                          {i < parsed.postcodes!.length - 1
+                                            ? " → "
+                                            : ""}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              {parsed.notes && (
+                                <div className="mt-1 text-xs text-gray-400">
+                                  Notes: {parsed.notes}
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -293,7 +433,7 @@ export default function AdminEmailsPage() {
                       )}
 
                       {/* Actions */}
-                      {isError && log.body && (
+                      {(isError || log.status === "partial") && log.body && (
                         <button
                           onClick={() => handleRetry(log)}
                           className="text-xs px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors"

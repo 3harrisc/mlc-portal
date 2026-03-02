@@ -210,6 +210,8 @@ ${depotList}
 - If you recognize a from/origin location, put the postcode in "fromPostcode"
 - Look for reference numbers, booking numbers, consignment numbers — put them in loadRef or collectionRef as appropriate
 - For backloads at the bottom of confirmation emails, the "collectionRef" is the reference number and "fromLocation"/"fromPostcode" is where to collect from
+- For backloads, put the DELIVERY destination in "destination"/"destinationPostcode" and the COLLECTION origin in "fromLocation"/"fromPostcode"
+- ALWAYS include at least one postcode in "deliveryPostcodes" for every run — if you only know a location name (e.g. "Middleton Foods"), put the name in the postcode field and it will be resolved
 - For regular runs in a table, the "Time" column is the DELIVERY/BOOKING time at the destination — put it in "deliveryTime", NOT "collectionTime"
 - "collectionTime" is ONLY for backload collection/pickup times
 - ALL runs in the same email are for the SAME date. Use the date from the table/header for ALL runs including backloads listed at the bottom
@@ -462,24 +464,30 @@ export async function POST(req: Request) {
         postcodeLines = parsed.deliveryPostcodes
           .filter((p: any) => p.postcode)
           .map((p: any) => {
-            const pc = normalizePostcode(p.postcode);
+            // Resolve location names (e.g. "Middleton Foods") to postcodes via depot aliases
+            const pc = resolveLocation(p.postcode);
             let line = p.time ? `${pc} ${p.time}` : pc;
             if (p.ref) line += ` REF:${p.ref}`;
             return line;
-          });
+          })
+          .filter((line) => /^[A-Z]{1,2}\d/i.test(line));
       }
 
       // If no delivery postcodes but we have a destination, resolve it
       if (!postcodeLines.length) {
+        // Try destination, then fromLocation (backloads may use fromLocation as the delivery point)
         const destPc = parsed.destinationPostcode
           ? resolveLocation(parsed.destinationPostcode)
-          : resolveLocation(parsed.destination || "");
+          : resolveLocation(parsed.destination || "")
+            || resolveLocation(parsed.fromLocation || "");
 
         if (destPc && /^[A-Z]{1,2}\d/i.test(destPc)) {
           // Use delivery time for the destination stop (not collection time)
           const bookingTime = parsed.deliveryTime || parsed.collectionTime || "";
           let line = bookingTime ? `${destPc} ${bookingTime}` : destPc;
-          if (parsed.loadRef) line += ` REF:${parsed.loadRef}`;
+          if (parsed.loadRef || parsed.collectionRef) {
+            line += ` REF:${parsed.loadRef || parsed.collectionRef}`;
+          }
           postcodeLines = [line];
         }
       }

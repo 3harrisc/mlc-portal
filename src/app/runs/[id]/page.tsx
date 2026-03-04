@@ -1593,6 +1593,13 @@ export default function RunDetailPage() {
                   const collBadgeText =
                     collStatus === "collected" ? "COLLECTED" : collStatus === "collecting" ? "COLLECTING" : "AWAITING COLLECTION";
 
+                  // Collection ETA: use booking time if set, otherwise chainedStartTime
+                  const collEta = collStatus === "waiting"
+                    ? (run.collectionTime
+                      ? `Booking ${run.collectionTime}`
+                      : (chainedStartTime ? `ETA ${chainedStartTime}` : null))
+                    : null;
+
                   return (
                     <div className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap mb-1">
                       <div className="flex items-center gap-3">
@@ -1603,6 +1610,11 @@ export default function RunDetailPage() {
                           <div className="font-semibold">
                             {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
                             <span className="ml-2 text-sm text-gray-400 font-normal">Collection</span>
+                            {collEta && (
+                              <span className={`ml-2 text-sm font-normal ${run.collectionTime ? "text-amber-300" : "text-blue-300"}`}>
+                                {collEta}
+                              </span>
+                            )}
                           </div>
                           {collStatus === "collecting" && progress?.collectArrivedMs && (
                             <div className="text-xs text-gray-500">

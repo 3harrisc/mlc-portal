@@ -1577,6 +1577,66 @@ export default function RunDetailPage() {
             <div className="text-gray-400 mt-4">No postcodes parsed from this run.</div>
           ) : (
             <div className="space-y-2 mt-4">
+              {/* Backload collection phase */}
+              {run.runType === "backload" && run.fromPostcode && (
+                (() => {
+                  const collected = progress?.collected ?? false;
+                  const collectingNow = !collected && progress?.collectArrivedMs != null;
+                  const collStatus = collected ? "collected" : collectingNow ? "collecting" : "waiting";
+
+                  const collBadge =
+                    collStatus === "collected"
+                      ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-200"
+                      : collStatus === "collecting"
+                      ? "bg-yellow-500/15 border-yellow-500/30 text-yellow-200"
+                      : "bg-white/5 border-white/10 text-gray-300";
+                  const collBadgeText =
+                    collStatus === "collected" ? "COLLECTED" : collStatus === "collecting" ? "COLLECTING" : "AWAITING COLLECTION";
+
+                  return (
+                    <div className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap mb-1">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center text-cyan-300 font-semibold text-sm">
+                          C
+                        </div>
+                        <div>
+                          <div className="font-semibold">
+                            {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
+                            <span className="ml-2 text-sm text-gray-400 font-normal">Collection</span>
+                          </div>
+                          {collStatus === "collecting" && progress?.collectArrivedMs && (
+                            <div className="text-xs text-gray-500">
+                              On site for {minutesBetween(progress.collectArrivedMs, Date.now())} mins
+                            </div>
+                          )}
+                          {collStatus === "collected" && (
+                            <div className="text-xs text-gray-500">
+                              {progress?.collectArrivedMs && (
+                                <span>Arrived {new Date(progress.collectArrivedMs).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                              )}
+                              {progress?.collectArrivedMs && progress?.collectDepartedISO && " — "}
+                              {progress?.collectDepartedISO ? (
+                                <span>Left {new Date(progress.collectDepartedISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                              ) : progress?.collectArrivedMs ? (
+                                <span> — Still on site</span>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                        <div className={`px-2 py-1 rounded-lg border text-xs font-semibold ${collBadge}`}>{collBadgeText}</div>
+                      </div>
+                      <a
+                        className="text-blue-400 underline text-sm"
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalizePostcode(run.fromPostcode))}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  );
+                })()
+              )}
               {stops.map((pc, idx) => {
                 const status = stopStatuses[idx] ?? "pending";
                 const isNext = nextIdx === idx;
@@ -1591,7 +1651,9 @@ export default function RunDetailPage() {
                     : "bg-white/5 border-white/10 text-gray-300";
 
                 const badgeText =
-                  status === "completed" ? "COMPLETED" : status === "on_site" ? "ON SITE" : isNext ? "NEXT" : "PENDING";
+                  status === "completed"
+                    ? (run.runType === "backload" ? "DELIVERED" : "COMPLETED")
+                    : status === "on_site" ? "ON SITE" : isNext ? "NEXT" : "PENDING";
 
                 return (
                   <div

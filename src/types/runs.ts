@@ -39,6 +39,10 @@ export type ProgressState = {
   onSiteIdx: number | null;
   onSiteSinceMs: number | null;
   lastInside: boolean;
+  // Backload collection tracking (at fromPostcode)
+  collectArrivedMs?: number | null;
+  collectDepartedISO?: string | null;
+  collected?: boolean;
 };
 
 export type Weekdays = {

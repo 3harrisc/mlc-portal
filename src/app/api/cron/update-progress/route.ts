@@ -142,6 +142,10 @@ export async function GET(req: Request) {
       const stops = parseStops(run.raw_text ?? "");
       runStopsMap.set(run.id, stops);
       for (const pc of stops) allPostcodes.add(normalizePostcode(pc));
+      // Include fromPostcode for backload collection tracking
+      if (run.run_type === "backload" && run.from_postcode) {
+        allPostcodes.add(normalizePostcode(run.from_postcode));
+      }
     }
 
     const coordsMap = await geocodePostcodes([...allPostcodes]);
@@ -233,6 +237,36 @@ export async function GET(req: Request) {
 
       const vehicleLL: LngLat = { lng: pos.lng, lat: pos.lat };
       const nowMs = Date.now();
+
+      // ── Backload collection tracking (at fromPostcode) ──
+      if (run.run_type === "backload" && !p.collected) {
+        const collPc = normalizePostcode(run.from_postcode ?? "");
+        const collLL = collPc ? coordsMap.get(collPc) : null;
+
+        if (collLL) {
+          const collDist = haversineMeters(vehicleLL, collLL);
+          const nearCollection = collDist <= COMPLETION_RADIUS_METERS;
+
+          if (nearCollection) {
+            if (p.collectArrivedMs == null) {
+              p.collectArrivedMs = nowMs;
+            }
+            // Mark collected after dwell threshold
+            if (minutesBetween(p.collectArrivedMs, nowMs) >= MIN_STANDSTILL_MINS) {
+              p.collected = true;
+              // Don't stamp departure yet — wait until vehicle leaves
+            }
+          } else if (p.collectArrivedMs != null) {
+            // Vehicle has left the collection point
+            if (minutesBetween(p.collectArrivedMs, nowMs) >= MIN_STANDSTILL_MINS) {
+              p.collected = true;
+            }
+            if (p.collected && !p.collectDepartedISO) {
+              p.collectDepartedISO = new Date().toISOString();
+            }
+          }
+        }
+      }
 
       // ── Find ALL uncompleted stops and check proximity to each ──
       const uncompletedIdxs: number[] = [];

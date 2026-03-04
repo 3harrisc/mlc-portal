@@ -173,6 +173,8 @@ export async function GET(req: Request) {
     //    This prevents auto-completing a later run when it shares a stop postcode
     //    with an earlier run (e.g. two Tamworth loads on the same vehicle).
     const skippedRunIds = new Set<string>();
+    // Runs that are NOT first on their vehicle+date chain — need departure gate
+    const chainedNonFirstIds = new Set<string>();
     {
       // Group runs by vehicle + date
       const groups = new Map<string, typeof activeRuns>();
@@ -190,6 +192,10 @@ export async function GET(req: Request) {
           if (oa !== ob) return oa - ob;
           return (a.start_time || "").localeCompare(b.start_time || "");
         });
+        // Mark all non-first runs as chained
+        for (let i = 1; i < group.length; i++) {
+          chainedNonFirstIds.add(group[i].id);
+        }
         // Find the first run that still has uncompleted stops
         let foundActive = false;
         for (const run of group) {
@@ -325,9 +331,39 @@ export async function GET(req: Request) {
         }
       }
 
-      const inside = insideIdx != null;
+      let inside = insideIdx != null;
       // The target stop index: whichever uncompleted stop we're near, or the first uncompleted
       const nsi = insideIdx ?? uncompletedIdxs[0];
+
+      // ── Chained run departure gate ──
+      // For non-first runs on a vehicle+date chain: require the vehicle to
+      // leave all stop radii before tracking begins. This prevents run 2
+      // from auto-completing at the same postcode as run 1 (e.g. two
+      // Tamworth loads — vehicle must return to Newark for trailer 2 first).
+      if (chainedNonFirstIds.has(run.id)) {
+        if (p.pendingDeparture == null) {
+          // First time this run is processed — determine initial state
+          p.pendingDeparture = inside; // true if vehicle is already at a stop
+        }
+        if (p.pendingDeparture) {
+          if (!inside) {
+            // Vehicle has left all stop radii — clear the gate
+            p.pendingDeparture = false;
+          } else {
+            // Still at a stop from the previous run — skip tracking this cycle
+            p.lastInside = true;
+
+            // Still persist the pendingDeparture flag
+            const { error: pdErr } = await sb
+              .from("runs")
+              .update({ progress: p })
+              .eq("id", run.id);
+            if (!pdErr) updated++;
+            results.push({ runId: run.id, vehicle: run.vehicle, status: "pending_departure" });
+            continue;
+          }
+        }
+      }
 
       // ── Proximity / dwell logic ──
       // Completion = within radius for >= MIN_STANDSTILL_MINS (speed irrelevant).

@@ -43,6 +43,9 @@ export type ProgressState = {
   collectArrivedMs?: number | null;
   collectDepartedISO?: string | null;
   collected?: boolean;
+  // Chained run protection: vehicle must leave stop area before tracking begins
+  // undefined = not yet determined, true = waiting for departure, false = cleared
+  pendingDeparture?: boolean;
 };
 
 export type Weekdays = {

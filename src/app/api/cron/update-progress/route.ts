@@ -93,10 +93,11 @@ export async function GET(req: Request) {
     const today = now.toISOString().slice(0, 10);
     const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
 
+    // Also fetch cross-day backloads where collection_date is today/yesterday
     const { data: runs, error: runsErr } = await sb
       .from("runs")
       .select("*")
-      .in("date", [today, yesterday])
+      .or(`date.in.(${today},${yesterday}),collection_date.in.(${today},${yesterday})`)
       .neq("vehicle", "");
 
     if (runsErr) {
@@ -119,6 +120,8 @@ export async function GET(req: Request) {
     // Filter out yesterday's runs that are already fully complete
     const activeRuns = runs.filter((r: any) => {
       if (r.date === today) return true;
+      // Cross-day backload: collection is today — keep for collection tracking
+      if (r.collection_date === today) return true;
       // Yesterday's run — only keep if it has uncompleted stops
       const stops = parseStops(r.raw_text ?? "");
       const completed = r.completed_stop_indexes ?? [];

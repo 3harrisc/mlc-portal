@@ -237,20 +237,32 @@ export default function RunDetailPage() {
   }, [runId]);
 
   // Fetch sibling runs (same vehicle+date) to compute chained start time
+  // For cross-day backloads, also look at runs on the collectionDate
   useEffect(() => {
     if (!run || !run.vehicle?.trim()) return;
     const supabase = createClient();
+    const vehicle = run.vehicle.trim();
+
+    // Determine which dates to query - delivery date + collection date if different
+    const dates = [run.date];
+    if (run.collectionDate && run.collectionDate !== run.date) {
+      dates.push(run.collectionDate);
+    }
+
     supabase
       .from("runs")
       .select("*")
-      .eq("vehicle", run.vehicle.trim())
-      .eq("date", run.date)
+      .eq("vehicle", vehicle)
+      .or(dates.map((d) => `date.eq.${d},collection_date.eq.${d}`).join(","))
       .order("run_order", { ascending: true, nullsFirst: false })
       .then(({ data }) => {
         if (!data || data.length <= 1) return;
         const siblings = data.map(rowToRun);
-        // Sort: by run_order first, then by start_time
+        // Sort: by effective date (collectionDate or date) first, then run_order, then start_time
         siblings.sort((a, b) => {
+          const aDate = a.collectionDate || a.date;
+          const bDate = b.collectionDate || b.date;
+          if (aDate !== bDate) return aDate.localeCompare(bDate);
           if (a.runOrder != null && b.runOrder != null) return a.runOrder - b.runOrder;
           if (a.runOrder != null) return -1;
           if (b.runOrder != null) return 1;
@@ -262,7 +274,7 @@ export default function RunDetailPage() {
           setChainedStartTime(myChain.chainedStartTime);
         }
       });
-  }, [run?.id, run?.vehicle, run?.date]);
+  }, [run?.id, run?.vehicle, run?.date, run?.collectionDate]);
 
   // Periodically sync progress from DB to pick up cron-written completions
   useEffect(() => {

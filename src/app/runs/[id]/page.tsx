@@ -372,8 +372,9 @@ export default function RunDetailPage() {
         stopIdx++;
       }
     }
-    // For single-stop runs, use collectionTime as booking time if not already parsed
-    if (!times.has(0) && run.collectionTime) {
+    // Use collectionTime as the authoritative booking time for the first stop
+    // (the raw text time may differ due to email parsing errors)
+    if (run.collectionTime) {
       times.set(0, run.collectionTime);
     }
     return times;

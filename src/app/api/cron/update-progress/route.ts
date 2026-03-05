@@ -119,6 +119,8 @@ export async function GET(req: Request) {
 
     // Filter out yesterday's runs that are already fully complete
     const activeRuns = runs.filter((r: any) => {
+      // Skip vehicles with no tracker — these are manually managed
+      if (normVehicle(r.vehicle) === "NOTRACKER") return false;
       if (r.date === today) return true;
       // Cross-day backload: collection is today — keep for collection tracking
       if (r.collection_date === today) return true;

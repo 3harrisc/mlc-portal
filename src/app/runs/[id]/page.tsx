@@ -208,6 +208,9 @@ export default function RunDetailPage() {
   // Customer opening/closing times (fetched from DB)
   const [customerTimes, setCustomerTimes] = useState<{ open: string; close: string }>({ open: "08:00", close: "17:00" });
 
+  // Manual ETA for NO TRACKER runs
+  const [manualEta, setManualEta] = useState<string>("");
+
   // Debounce timer for persisting progress to DB
   const progressSaveTimer = useRef<any>(null);
 
@@ -602,6 +605,13 @@ export default function RunDetailPage() {
         return;
       }
 
+      // NO TRACKER — skip Webfleet, show manual controls only
+      if (vehicle.toUpperCase().replace(/\s+/g, "") === "NOTRACKER") {
+        setVehicleSnap(null);
+        setVehicleError("");
+        return;
+      }
+
       try {
         const res = await fetch(`/api/webfleet/vehicle?vehicle=${encodeURIComponent(vehicle)}`, {
           cache: "no-store",
@@ -798,6 +808,23 @@ export default function RunDetailPage() {
     const p = progress;
     return nextStopIndex(stops, p ? p.completedIdx : []);
   }, [stops, progress]);
+
+  function adminSetManualTime(idx: number, field: "arrivedISO" | "atISO", time: string) {
+    if (!run || !isAdmin) return;
+    const [hh, mm] = time.split(":").map(Number);
+    if (isNaN(hh) || isNaN(mm)) return;
+    const [y, mo, d] = run.date.split("-").map(Number);
+    const dt = new Date(y, mo - 1, d, hh, mm, 0);
+    const iso = dt.toISOString();
+
+    setRun((prev) => {
+      if (!prev) return prev;
+      const newMeta = { ...(prev.completedMeta ?? {}) };
+      newMeta[idx] = { ...(newMeta[idx] ?? { by: "admin" as const }), [field]: iso };
+      updateRunAction(prev.id, { completedMeta: newMeta });
+      return { ...prev, completedMeta: newMeta };
+    });
+  }
 
   function adminMarkCompleted(idx: number) {
     if (!run || !isAdmin) return;
@@ -1112,6 +1139,7 @@ export default function RunDetailPage() {
   }
 
   const vehicleAssigned = (run.vehicle || "").trim().length > 0;
+  const isNoTracker = (run.vehicle || "").trim().toUpperCase().replace(/\s+/g, "") === "NOTRACKER";
 
   // label: show "Next day [opening time]" if ETA falls past customer closing time
   const etaLabel =
@@ -1396,6 +1424,11 @@ export default function RunDetailPage() {
                   Assign a vehicle to enable live ETA + on-site/completion.
                 </div>
               )}
+              {isNoTracker && (
+                <div className="mt-3 text-sm text-amber-300 font-semibold">
+                  No Tracker — mark stops complete manually and set ETAs above.
+                </div>
+              )}
 
               {vehicleError && (
                 <div className="mt-3 text-sm text-red-200 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
@@ -1407,7 +1440,37 @@ export default function RunDetailPage() {
 
             <div className="w-full md:min-w-[280px] md:w-auto">
               <div className="text-sm font-semibold mb-2">Vehicle snapshot</div>
-              {!vehicleSnap ? (
+              {isNoTracker ? (
+                <div className="border border-amber-500/20 rounded-xl p-4 bg-amber-500/5">
+                  <div className="text-sm text-amber-300 font-semibold">No Tracker</div>
+                  <div className="text-xs text-gray-400 mt-1">Manual tracking — use admin controls to set ETAs and mark stops</div>
+                  {isAdmin && (
+                    <div className="mt-3">
+                      <label className="text-xs text-gray-400 block mb-1">Manual ETA (next stop)</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={manualEta}
+                          onChange={(e) => setManualEta(e.target.value)}
+                          className="bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white text-sm w-32"
+                        />
+                        <button
+                          onClick={() => {
+                            if (manualEta) {
+                              setEtaText(manualEta);
+                              setEtaDetails(null);
+                            }
+                          }}
+                          disabled={!manualEta}
+                          className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium transition-colors disabled:opacity-50"
+                        >
+                          Set ETA
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : !vehicleSnap ? (
                 <div className="text-sm text-gray-400 border border-white/10 rounded-xl p-4">
                   {vehicleAssigned ? "Loading..." : "No vehicle assigned."}
                 </div>
@@ -1630,18 +1693,18 @@ export default function RunDetailPage() {
                             )}
                           </div>
                           {collStatus === "collecting" && progress?.collectArrivedMs && (
-                            <div className="text-xs text-gray-500">
+                            <div className="text-sm text-yellow-300 font-medium">
                               On site for {minutesBetween(progress.collectArrivedMs, Date.now())} mins
                             </div>
                           )}
                           {collStatus === "collected" && (
-                            <div className="text-xs text-gray-500">
+                            <div className="text-sm text-gray-300 font-medium mt-0.5">
                               {progress?.collectArrivedMs && (
-                                <span>Arrived {new Date(progress.collectArrivedMs).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                                <span>In <span className="text-emerald-300 font-semibold">{new Date(progress.collectArrivedMs).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span></span>
                               )}
                               {progress?.collectArrivedMs && progress?.collectDepartedISO && " — "}
                               {progress?.collectDepartedISO ? (
-                                <span>Left {new Date(progress.collectDepartedISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                                <span>Out <span className="text-red-300 font-semibold">{new Date(progress.collectDepartedISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span></span>
                               ) : progress?.collectArrivedMs ? (
                                 <span> — Still on site</span>
                               ) : null}
@@ -1650,14 +1713,29 @@ export default function RunDetailPage() {
                         </div>
                         <div className={`px-2 py-1 rounded-lg border text-xs font-semibold ${collBadge}`}>{collBadgeText}</div>
                       </div>
-                      <a
-                        className="text-blue-400 underline text-sm"
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalizePostcode(run.fromPostcode))}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open
-                      </a>
+                      <div className="flex items-center gap-2">
+                        {isAdmin && !collected && (
+                          <button
+                            onClick={() => {
+                              const nowMs = Date.now();
+                              const p = progressRef.current ?? { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false };
+                              const updated: ProgressState = { ...p, collected: true, collectArrivedMs: p.collectArrivedMs ?? nowMs, collectDepartedISO: new Date().toISOString() };
+                              saveProgress(updated);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium transition-colors"
+                          >
+                            Mark Collected
+                          </button>
+                        )}
+                        <a
+                          className="text-blue-400 underline text-sm"
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(normalizePostcode(run.fromPostcode))}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open
+                        </a>
+                      </div>
                     </div>
                   );
                 })()
@@ -1704,21 +1782,40 @@ export default function RunDetailPage() {
                           <div className="text-xs text-gray-400">Ref: {stopRefs.get(idx)}</div>
                         )}
                         {status === "on_site" && progress?.onSiteSinceMs && (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-sm text-yellow-300 font-medium">
                             On site for {minutesBetween(progress.onSiteSinceMs, Date.now())} mins
                           </div>
                         )}
                         {status === "completed" && run?.completedMeta?.[idx] && (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-sm text-gray-300 font-medium mt-0.5">
                             {run.completedMeta[idx].arrivedISO && (
-                              <span>Arrived {new Date(run.completedMeta[idx].arrivedISO!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                              <span>In <span className="text-emerald-300 font-semibold">{new Date(run.completedMeta[idx].arrivedISO!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span></span>
                             )}
                             {run.completedMeta[idx].arrivedISO && run.completedMeta[idx].atISO && " — "}
                             {run.completedMeta[idx].atISO ? (
-                              <span>Left {new Date(run.completedMeta[idx].atISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span>
+                              <span>Out <span className="text-red-300 font-semibold">{new Date(run.completedMeta[idx].atISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span></span>
                             ) : run.completedMeta[idx].arrivedISO ? (
                               <span> — Still on site</span>
                             ) : null}
+                          </div>
+                        )}
+                        {/* Manual time inputs for NO TRACKER runs (admin only) */}
+                        {isNoTracker && isAdmin && status === "completed" && (
+                          <div className="flex items-center gap-2 mt-1">
+                            <label className="text-xs text-gray-500">In:</label>
+                            <input
+                              type="time"
+                              defaultValue={run?.completedMeta?.[idx]?.arrivedISO ? new Date(run.completedMeta[idx].arrivedISO!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""}
+                              onBlur={(e) => adminSetManualTime(idx, "arrivedISO", e.target.value)}
+                              className="bg-transparent border border-white/15 rounded px-2 py-0.5 text-sm w-24"
+                            />
+                            <label className="text-xs text-gray-500">Out:</label>
+                            <input
+                              type="time"
+                              defaultValue={run?.completedMeta?.[idx]?.atISO ? new Date(run.completedMeta[idx].atISO).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""}
+                              onBlur={(e) => adminSetManualTime(idx, "atISO", e.target.value)}
+                              className="bg-transparent border border-white/15 rounded px-2 py-0.5 text-sm w-24"
+                            />
                           </div>
                         )}
                       </div>

@@ -466,14 +466,14 @@ export default function RunDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id, mapboxToken, stops.join("|")]);
 
-  // Is this run in the future?
+  // Is this run in the future? Only true if the DATE is tomorrow or later.
+  // Today's runs are always live — chained runs need continuous tracking
+  // even if their start time hasn't arrived yet.
   const isFutureRun = useMemo(() => {
     if (!run) return false;
-    const [y, mo, d] = run.date.split("-").map(Number);
-    const [hh, mm] = (run.startTime || "08:00").split(":").map(Number);
-    const runStart = new Date(y, mo - 1, d, hh, mm, 0);
-    return runStart.getTime() > Date.now();
-  }, [run?.date, run?.startTime]);
+    const today = new Date().toISOString().slice(0, 10);
+    return run.date > today;
+  }, [run?.date]);
 
   // Scheduled ETA chain (for future runs or as fallback)
   useEffect(() => {

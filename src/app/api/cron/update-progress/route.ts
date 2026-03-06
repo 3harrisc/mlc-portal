@@ -318,7 +318,28 @@ export async function GET(req: Request) {
           }
         }
 
-        results.push({ runId: run.id, vehicle: run.vehicle, status: "all_done" });
+        // Patch any completed stops still missing atISO (e.g. client cleared
+        // onSiteIdx on departure but didn't write completedMeta)
+        const allDoneMeta: Record<number, any> = { ...(run.completed_meta ?? {}) };
+        let allDonePatched = false;
+        for (const idx of (run.completed_stop_indexes ?? [])) {
+          const entry = allDoneMeta[idx];
+          if (entry && !entry.atISO) {
+            allDoneMeta[idx] = { ...entry, atISO: new Date().toISOString() };
+            allDonePatched = true;
+          }
+          if (!entry) {
+            allDoneMeta[idx] = { by: "auto" as const, atISO: new Date().toISOString() };
+            allDonePatched = true;
+          }
+        }
+        if (allDonePatched) {
+          await sb.from("runs").update({ completed_meta: allDoneMeta }).eq("id", run.id);
+          updated++;
+          results.push({ runId: run.id, vehicle: run.vehicle, status: "patched_departure_times" });
+        } else {
+          results.push({ runId: run.id, vehicle: run.vehicle, status: "all_done" });
+        }
         continue;
       }
 

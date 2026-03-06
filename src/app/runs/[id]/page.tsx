@@ -653,8 +653,20 @@ export default function RunDetailPage() {
               ? haversineMeters(vehicleLLCheck, trackedLL) <= COMPLETION_RADIUS_METERS
               : false;
             if (!nearTracked) {
+              // Stamp departure time in completedMeta
+              const departedIdx = p.onSiteIdx;
               p.onSiteIdx = null;
               p.onSiteSinceMs = null;
+              setRun((prev) => {
+                if (!prev) return prev;
+                const meta = { ...(prev.completedMeta ?? {}) };
+                if (meta[departedIdx] && !meta[departedIdx].atISO) {
+                  meta[departedIdx] = { ...meta[departedIdx], atISO: new Date().toISOString() };
+                  updateRunAction(prev.id, { completedMeta: meta });
+                  return { ...prev, completedMeta: meta };
+                }
+                return prev;
+              });
             }
           }
           if (progressChanged(current, p)) saveProgress(p);
@@ -683,8 +695,22 @@ export default function RunDetailPage() {
               : false;
 
             if (!nearTracked) {
+              // Stamp departure time in completedMeta
+              const departedIdx = p.onSiteIdx;
               p.onSiteIdx = null;
               p.onSiteSinceMs = null;
+              if (p.completedIdx.includes(departedIdx)) {
+                setRun((prev) => {
+                  if (!prev) return prev;
+                  const meta = { ...(prev.completedMeta ?? {}) };
+                  if (meta[departedIdx] && !meta[departedIdx].atISO) {
+                    meta[departedIdx] = { ...meta[departedIdx], atISO: new Date().toISOString() };
+                    updateRunAction(prev.id, { completedMeta: meta });
+                    return { ...prev, completedMeta: meta };
+                  }
+                  return prev;
+                });
+              }
             }
           }
 

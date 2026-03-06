@@ -241,11 +241,29 @@ ${emailBody}`;
 
   contentBlocks.push({ type: "text", text: prompt });
 
-  const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 2048,
-    messages: [{ role: "user", content: contentBlocks }],
-  });
+  // Retry with exponential backoff for transient errors (529 overloaded, 500, etc.)
+  let response: Anthropic.Message | null = null;
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      response = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2048,
+        messages: [{ role: "user", content: contentBlocks }],
+      });
+      break; // success
+    } catch (err: any) {
+      const status = err?.status ?? err?.statusCode ?? 0;
+      const isRetryable = status === 529 || status === 500 || status === 502 || status === 503;
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const delayMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw err; // non-retryable or exhausted retries
+    }
+  }
+  if (!response) throw new Error("Claude API returned no response after retries");
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";

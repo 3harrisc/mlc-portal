@@ -593,7 +593,12 @@ export async function POST(req: Request) {
       from_address: fromAddress,
       subject,
       body: emailBody.slice(0, 10000),
-      parsed_data: { runs: parsedRuns },
+      parsed_data: {
+        runs: parsedRuns,
+        created: createdRuns.map((r) => r.name),
+        runsCreated: createdRuns.length,
+        runsParsed: parsedRuns.length,
+      },
       run_id: createdRuns[0]?.runId ?? null,
       status,
       error: errors.length > 0 ? errors.join("; ") : null,

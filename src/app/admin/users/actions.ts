@@ -30,7 +30,7 @@ export async function inviteUser(email: string, role: string) {
   await requireAdmin();
 
   const admin = getAdminClient();
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   // Invite user by email — Supabase creates the auth user and sends a magic link
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
@@ -122,7 +122,7 @@ export async function resendInvite(userId: string, email: string) {
   await requireAdmin();
 
   const admin = getAdminClient();
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   const { error } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo: `${siteUrl}/auth/callback`,

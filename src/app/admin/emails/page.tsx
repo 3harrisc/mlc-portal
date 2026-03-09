@@ -201,7 +201,13 @@ export default function AdminEmailsPage() {
                           <div className="text-xs text-gray-400 mt-1">
                             {parsed.runs && parsed.runs.length > 0 ? (
                               <span>
-                                {parsed.runs.length} run{parsed.runs.length !== 1 ? "s" : ""}
+                                {(parsed as any).runsCreated != null ? (
+                                  <span className={(parsed as any).runsCreated < parsed.runs.length ? "text-amber-400" : ""}>
+                                    {(parsed as any).runsCreated}/{parsed.runs.length} runs created
+                                  </span>
+                                ) : (
+                                  <>{parsed.runs.length} run{parsed.runs.length !== 1 ? "s" : ""}</>
+                                )}
                                 {" "}&middot;{" "}
                                 {parsed.runs[0].customer || "Unknown"}{" "}
                                 {parsed.runs[0].date ? `&middot; ${parsed.runs[0].date}` : ""}
@@ -288,6 +294,13 @@ export default function AdminEmailsPage() {
                                       <span className="text-xs font-semibold">
                                         {r.name || `Run ${idx + 1}`}
                                       </span>
+                                      {(parsed as any).created && (
+                                        (parsed as any).created.includes(r.name) ? (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/10 text-emerald-400">created</span>
+                                        ) : (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-400/10 text-red-400">skipped</span>
+                                        )
+                                      )}
                                       {r.type && (
                                         <span
                                           className={`text-[10px] px-1.5 py-0.5 rounded ${

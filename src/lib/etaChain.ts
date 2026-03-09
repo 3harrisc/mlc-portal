@@ -141,7 +141,7 @@ export async function buildEtaChain(params: {
   startAt?: Date;
   startPos: LngLat; // vehicle position NOW
   // remaining stops in order (postcodes + coords already known)
-  stops: Array<{ postcode: string; coord: LngLat }>;
+  stops: Array<{ postcode: string; coord: LngLat; minArriveAt?: Date }>;
   // optional: final end after last stop (e.g. base). If omitted, chain ends at last stop.
   end?: { postcode: string; coord: LngLat };
   options: EtaChainOptions;
@@ -186,9 +186,9 @@ export async function buildEtaChain(params: {
   }
 
   // Build waypoints list: vehicle -> stop1 -> stop2 ... -> stopN -> (end?)
-  const points: Array<{ label: string; postcode?: string; coord: LngLat }> = [
+  const points: Array<{ label: string; postcode?: string; coord: LngLat; minArriveAt?: Date }> = [
     { label: "Vehicle", coord: startPos },
-    ...stops.map((s, i) => ({ label: `Stop ${i + 1}`, postcode: normalizePostcode(s.postcode), coord: s.coord })),
+    ...stops.map((s, i) => ({ label: `Stop ${i + 1}`, postcode: normalizePostcode(s.postcode), coord: s.coord, minArriveAt: s.minArriveAt })),
   ];
 
   if (end) {
@@ -243,9 +243,28 @@ export async function buildEtaChain(params: {
     // service time applies only when arriving at a STOP (not vehicle, not end)
     let serviceMins = 0;
     if (to.label.startsWith("Stop")) {
+      // If this stop has a minimum arrival time (e.g. a booking/collection time),
+      // the driver must wait until that time before they can be served/depart.
+      if (to.minArriveAt && arriveAt < to.minArriveAt) {
+        arriveAt = new Date(to.minArriveAt);
+        cursor = new Date(arriveAt);
+        driveSinceBreak = 0; // break the driving accumulator — driver was waiting
+      }
+
+      let arriveMins = arriveAt.getHours() * 60 + arriveAt.getMinutes();
+
+      // If driver arrives before the customer opens (e.g. 08:00), they must wait.
+      // nextDayStartMins represents the opening time — enforce it even on the first day.
+      if (nextDayStartMins > 0 && arriveMins < nextDayStartMins) {
+        arriveAt = new Date(arriveAt);
+        arriveAt.setHours(Math.floor(nextDayStartMins / 60), nextDayStartMins % 60, 0, 0);
+        cursor = new Date(arriveAt);
+        driveSinceBreak = 0; // driver was waiting, reset drive counter
+        arriveMins = nextDayStartMins;
+      }
+
       // If arrival is past the working day cutoff, the customer won't be
       // available until they open — roll arrival to next day opening time.
-      const arriveMins = arriveAt.getHours() * 60 + arriveAt.getMinutes();
       if (arriveMins >= cutoffMins) {
         const rolled = new Date(arriveAt);
         rolled.setDate(rolled.getDate() + 1);

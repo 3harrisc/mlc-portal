@@ -393,9 +393,10 @@ export default function RunDetailPage() {
       returnToBase: updated.returnToBase,
       customer: updated.customer,
       collectionTime: updated.collectionTime ?? null,
+      runType: updated.runType,
+      collectionDate: updated.collectionDate ?? null,
       ...extraFields,
     };
-    if (updated.collectionDate) fields.collectionDate = updated.collectionDate;
     updateRunAction(updated.id, fields);
   }
 

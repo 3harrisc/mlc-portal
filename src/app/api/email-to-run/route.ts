@@ -539,10 +539,16 @@ export async function POST(req: Request) {
         || "";
       const startTime = isMultiRun
         ? (collectionTime || "08:00")
+        : runType === "backload"
+        ? (collectionTime || "08:00")  // backload: start at collection time or default depot departure
         : (collectionTime || deliveryTime || "08:00");
 
-      // Store booking time: for backloads it's the collection time, for regular runs the delivery time
-      const bookingTime = collectionTime || deliveryTime || undefined;
+      // For backloads: collectionTime is the pickup booking at the COLLECTION SITE only.
+      // The delivery booking is already embedded in rawText — don't bleed it into collectionTime.
+      // For regular runs: use deliveryTime as the chain anchor booking.
+      const bookingTime = runType === "backload"
+        ? (collectionTime || undefined)
+        : (collectionTime || deliveryTime || undefined);
 
       const run: PlannedRun = {
         id: crypto.randomUUID(),

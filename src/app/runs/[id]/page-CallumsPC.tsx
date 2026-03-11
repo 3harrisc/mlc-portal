@@ -1235,15 +1235,17 @@ export default function RunDetailPage() {
                 className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
               />
             </div>
-            <div>
-              <label className="block text-gray-500 mb-1">Booking time</label>
-              <input
-                type="time"
-                value={run.collectionTime || ""}
-                onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
-                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
-              />
-            </div>
+            {run.runType !== "backload" && (
+              <div>
+                <label className="block text-gray-500 mb-1">Booking time</label>
+                <input
+                  type="time"
+                  value={run.collectionTime || ""}
+                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
+                  className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-gray-500 mb-1">Service (mins)</label>
               <input

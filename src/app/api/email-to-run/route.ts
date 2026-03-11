@@ -187,8 +187,8 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "vehicle": "vehicle registration if mentioned, or empty string",
       "loadRef": "reference number for this load/run, or empty string",
       "collectionRef": "collection reference number, or empty string",
-      "deliveryTime": "delivery/booking time at the destination in HH:MM 24hr format, or empty string",
-      "collectionTime": "collection/pickup time in HH:MM 24hr format (backloads only), or empty string",
+      "deliveryTime": "delivery/booking time at the DESTINATION in HH:MM 24hr format — this is when goods must ARRIVE at the delivery point (e.g. 'Booking 18:00', 'Deliver by 06:00'). Use for BOTH regular runs AND backloads. Or empty string.",
+      "collectionTime": "time to arrive at the COLLECTION SITE to pick up goods in HH:MM 24hr format (backloads only). This is NOT the delivery booking — it is when the driver must be at the pickup location. Only set if the email explicitly states a collection/pickup time. Or empty string.",
       "price": "price if mentioned (e.g. '£350'), or empty string",
       "notes": "any notes, pallet counts, vehicle type requirements, or empty string"
     }
@@ -213,7 +213,8 @@ ${depotList}
 - For backloads, put the DELIVERY destination in "destination"/"destinationPostcode" and the COLLECTION origin in "fromLocation"/"fromPostcode"
 - ALWAYS include at least one postcode in "deliveryPostcodes" for every run — if you only know a location name (e.g. "Middleton Foods"), put the name in the postcode field and it will be resolved
 - For regular runs in a table, the "Time" column is the DELIVERY/BOOKING time at the destination — put it in "deliveryTime", NOT "collectionTime"
-- "collectionTime" is ONLY for backload collection/pickup times
+- For backloads: "Booking" times, delivery times, and destination times go in "deliveryTime" — this is when goods must arrive at the delivery destination
+- "collectionTime" is ONLY for when the email explicitly states a time to arrive at the COLLECTION/PICKUP site (e.g. "Collect at 14:00", "Pick up from 08:00"). Most backloads do NOT have a collection time — leave it empty unless explicitly stated
 - ALL runs in the same email are for the SAME date. Use the date from the table/header for ALL runs including backloads listed at the bottom
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array

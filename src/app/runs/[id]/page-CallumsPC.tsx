@@ -346,7 +346,7 @@ export default function RunDetailPage() {
   }, [run]);
 
   // Extract per-stop booking times from rawText lines (e.g. "B78 3HJ 14:30 REF:...")
-  // Falls back to run.collectionTime for the first stop (booking time from email)
+  // These are DELIVERY booking times only. Collection site booking is run.collectionTime (separate).
   const stopBookingTimes = useMemo(() => {
     if (!run) return new Map<number, string>();
     const times = new Map<number, string>();
@@ -360,10 +360,8 @@ export default function RunDetailPage() {
         stopIdx++;
       }
     }
-    // For backload runs: collectionTime IS the collection booking time (when goods are
-    // ready to be picked up). Apply it to stop 0 (the collection site).
-    // For regular runs: collectionTime is a chain anchor, not a per-stop booking time.
-    if (run.runType === "backload" && run.collectionTime && !times.has(0)) {
+    // For regular (non-backload) runs: collectionTime is a chain anchor booking for stop 0
+    if (run.runType !== "backload" && run.collectionTime && !times.has(0)) {
       times.set(0, run.collectionTime);
     }
     return times;
@@ -489,11 +487,14 @@ export default function RunDetailPage() {
       const fromLL = coordsByPostcode[fromPc];
       const [y, mo, d] = currentRun.date.split("-").map(Number);
 
-      // Attach minArriveAt for stops that have a booking time (e.g. a collection booking
-      // or a timed delivery). This prevents the chain from scheduling departure before
-      // the stop is actually available, even if the driver arrives early.
+      // Attach minArriveAt for stops that have a booking time.
+      // - Collection stop (backload idx 0): uses run.collectionTime
+      // - Delivery stops: uses per-stop booking time from rawText (stopBookingTimes)
       const remainingWithCoords = remaining.map((s) => {
-        const bookingHHMM = stopBookingTimes.get(s.i);
+        const isBackloadCollection = currentRun.runType === "backload" && s.i === 0;
+        const bookingHHMM = isBackloadCollection
+          ? currentRun.collectionTime   // collection site booking (may be null = open)
+          : stopBookingTimes.get(s.i);  // delivery booking from rawText
         let minArriveAt: Date | undefined;
         if (bookingHHMM) {
           const [bh, bm] = bookingHHMM.split(":").map(Number);
@@ -1642,11 +1643,11 @@ export default function RunDetailPage() {
                           {isCollectionStop && <span className="text-xs text-purple-300 font-normal mr-1">Collection:</span>}
                           {withNickname(pc, nicknames)}
                           {isCollectionStop && status !== "completed" && (
-                            stopBookingTimes.has(idx)
-                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                            run.collectionTime
+                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {run.collectionTime}</span>
                               : stopEtaMap[idx]
                               ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
-                              : null
+                              : <span className="ml-2 text-sm text-gray-500 font-normal">Open booking</span>
                           )}
                           {!isCollectionStop && status !== "completed" && stopBookingTimes.has(idx) && (
                             <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>

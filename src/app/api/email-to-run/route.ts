@@ -149,7 +149,7 @@ type ParsedRun = {
   destinationPostcode: string;
   fromLocation: string;
   fromPostcode: string;
-  deliveryPostcodes: { postcode: string; time?: string; ref?: string }[];
+  deliveryPostcodes: { postcode: string; address?: string; time?: string; ref?: string }[];
   vehicle: string;
   loadRef: string;
   collectionRef: string;
@@ -257,7 +257,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this structure:
       "fromLocation": "collection/origin location name, or empty string",
       "fromPostcode": "collection/origin postcode if known, or empty string",
       "deliveryPostcodes": [
-        {"postcode": "XX1 2YY", "time": "HH:MM or null", "ref": "reference or null"}
+        {"postcode": "XX1 2YY", "address": "full street address if available, or empty string", "time": "HH:MM or null", "ref": "reference or null"}
       ],
       "vehicle": "vehicle registration if mentioned, or empty string",
       "loadRef": "reference number for this load/run, or empty string",
@@ -294,6 +294,10 @@ ${depotList}
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array
 - Check BOTH the email body AND any attached PDF/Excel documents
+- For Excel/spreadsheet data: carefully extract UK postcodes from full addresses (e.g. "Unit 5, Industrial Park, Grantham, NG31 7FZ" → postcode "NG31 7FZ", address "Unit 5, Industrial Park, Grantham, NG31 7FZ")
+- If an Excel cell contains a full address, ALWAYS extract the UK postcode from it (pattern: 1-2 letters, 1-2 digits, optional letter, space, digit, 2 letters)
+- Include the full address in the "address" field of deliveryPostcodes for more accurate location pinpointing
+- If a location name is given WITHOUT a postcode (e.g. just "Grantham"), still include it in the postcode field — it will be geocoded
 
 Email subject: ${subject}
 
@@ -584,13 +588,16 @@ export async function POST(req: Request) {
           if (!p.postcode) continue;
           let pc = resolveLocation(p.postcode);
           // If alias lookup didn't resolve to a postcode, try geocoding
+          // Prefer the full address for accuracy, fall back to the postcode/name field
           if (!/^[A-Z]{1,2}\d/i.test(pc)) {
-            const geocoded = await geocodeToPostcode(p.postcode);
+            const geocoded = await geocodeToPostcode(p.address || p.postcode);
             if (geocoded) pc = geocoded;
           }
           if (!/^[A-Z]{1,2}\d/i.test(pc)) continue; // still not a postcode — skip
           let line = p.time ? `${pc} ${p.time}` : pc;
           if (p.ref) line += ` REF:${p.ref}`;
+          // Store full address alongside postcode for precise geocoding in the run detail page
+          if (p.address) line += ` ADDR:${p.address}`;
           resolvedLines.push(line);
         }
         postcodeLines = resolvedLines;

@@ -59,7 +59,24 @@ const DEFAULT_PROGRESS: ProgressState = {
   lastInside: false,
 };
 
-async function geocodePostcode(postcode: string, mapboxToken: string): Promise<LngLat> {
+async function geocodePostcode(postcode: string, mapboxToken: string, address?: string): Promise<LngLat> {
+  // If a full address is available, use it for more precise geocoding (exact building vs postcode centroid)
+  if (address) {
+    try {
+      const addrUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+        address
+      )}.json?access_token=${encodeURIComponent(mapboxToken)}&country=gb&types=address,poi&limit=1`;
+      const addrRes = await fetch(addrUrl, { cache: "no-store" });
+      if (addrRes.ok) {
+        const addrData = await addrRes.json();
+        const ac = addrData?.features?.[0]?.center;
+        if (Array.isArray(ac) && ac.length >= 2) return { lng: ac[0], lat: ac[1] };
+      }
+    } catch {
+      // Fall through to postcode geocoding
+    }
+  }
+
   const pc = normalizePostcode(postcode);
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
     pc
@@ -410,7 +427,7 @@ export default function RunDetailPage() {
     }, 2000);
   }
 
-  async function ensureCoords(postcodes: string[]) {
+  async function ensureCoords(postcodes: string[], addressByPostcode?: Record<string, string>) {
     if (!mapboxToken) throw new Error("Missing NEXT_PUBLIC_MAPBOX_TOKEN.");
     const unique = Array.from(new Set(postcodes.map(normalizePostcode))).filter(Boolean);
 
@@ -425,7 +442,8 @@ export default function RunDetailPage() {
         continue;
       }
 
-      const ll = await geocodePostcode(pc, mapboxToken);
+      const addr = addressByPostcode?.[pc];
+      const ll = await geocodePostcode(pc, mapboxToken, addr);
       geoCacheRef.current.set(pc, ll);
       next[pc] = ll;
     }
@@ -433,6 +451,20 @@ export default function RunDetailPage() {
     setCoordsByPostcode(next);
     return next;
   }
+
+  // Extract ADDR: tags from rawText for precise geocoding
+  const addressByPostcode = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!run?.rawText) return map;
+    for (const line of run.rawText.split(/\r?\n/)) {
+      const addrMatch = line.match(/ADDR:(.+?)$/i);
+      const pcMatch = line.match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})\b/i);
+      if (addrMatch && pcMatch) {
+        map[normalizePostcode(pcMatch[1])] = addrMatch[1].trim();
+      }
+    }
+    return map;
+  }, [run?.rawText]);
 
   // pre-geocode
   useEffect(() => {
@@ -447,7 +479,7 @@ export default function RunDetailPage() {
 
     if (!pcs.length) return;
 
-    ensureCoords(pcs).catch(() => {});
+    ensureCoords(pcs, addressByPostcode).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id, mapboxToken, stops.join("|")]);
 

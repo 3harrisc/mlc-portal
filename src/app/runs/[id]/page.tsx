@@ -810,9 +810,13 @@ export default function RunDetailPage() {
           return;
         }
 
-        const nextPc2 = stops[nsi2];
-        const nextLL2 = coordsByPostcode[nextPc2];
-        if (!nextLL2) {
+        // For backloads: before collection, ETA is to the collection site
+        const backloadAwaitingCollection = run.runType === "backload" && !p.collected;
+        const targetLL = backloadAwaitingCollection
+          ? coordsByPostcode[normalizePostcode(run.fromPostcode)]
+          : coordsByPostcode[stops[nsi2]];
+
+        if (!targetLL) {
           setEtaText("—");
           setEtaDetails(null);
           return;
@@ -825,13 +829,13 @@ export default function RunDetailPage() {
           return;
         }
 
-        const { mins, km } = await getDirectionsLeg(vehicleLL, nextLL2, mapboxToken);
+        const { mins, km } = await getDirectionsLeg(vehicleLL, targetLL, mapboxToken);
         const breakMins = addBreaksIfNeeded(mins, run.includeBreaks);
         let totalMins = mins + breakMins;
 
         // For backload runs: if the collection booking time hasn't passed yet, the driver
         // can't have departed the collection site. Add remaining wait to the ETA.
-        if (run.runType === "backload" && run.collectionTime && nsi2 > 0) {
+        if (run.runType === "backload" && run.collectionTime && nsi2 > 0 && !backloadAwaitingCollection) {
           const [y, mo, d] = run.date.split("-").map(Number);
           const [bh, bm] = run.collectionTime.split(":").map(Number);
           const earliestDepartureMs =
@@ -1484,27 +1488,30 @@ export default function RunDetailPage() {
               </div>
 
               {/* Backload phase indicator */}
-              {run.runType === "backload" && nextIdx != null && (
-                <div className="mt-2">
-                  {(progress?.completedIdx ?? []).length === 0 ? (
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-xs font-semibold">
-                        ETA to collection site
+              {run.runType === "backload" && nextIdx != null && (() => {
+                const awaitingCollection = !(progress?.collected);
+                return (
+                  <div className="mt-2">
+                    {awaitingCollection ? (
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-xs font-semibold">
+                          ETA to collection site
+                        </span>
+                        <span className="text-sm text-gray-300">
+                          {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
+                        </span>
+                        {run.collectionTime && (
+                          <span className="text-sm text-amber-300 font-semibold">Booking {run.collectionTime}</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-semibold">
+                        ETA to delivery site
                       </span>
-                      <span className="text-sm text-gray-300">
-                        {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
-                      </span>
-                      {run.collectionTime && (
-                        <span className="text-sm text-amber-300 font-semibold">Booking {run.collectionTime}</span>
-                      )}
-                    </div>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-semibold">
-                      ETA to delivery site
-                    </span>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                );
+              })()}
 
               {nextIdx != null && stopBookingTimes.has(nextIdx) && (
                 <div className="mt-2 flex items-center gap-2">
@@ -1513,15 +1520,16 @@ export default function RunDetailPage() {
               )}
               {nextIdx != null && (
                 <div className="mt-3 text-sm text-gray-300">
-                  {run.runType === "backload" && (progress?.completedIdx ?? []).length === 0
-                    ? <>Collection <span className="font-semibold text-white">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span> → </>
-                    : null
+                  {run.runType === "backload" && !(progress?.collected)
+                    ? <>Collection <span className="font-semibold text-white">{withNickname(normalizePostcode(run.fromPostcode), nicknames)}</span></>
+                    : <>
+                        Next {run.runType === "backload" ? "Delivery" : "Drop"}{" "}
+                        <span className="font-semibold text-white">{withNickname(stops[nextIdx], nicknames)}</span>
+                        {stopEtaMap[nextIdx] && (
+                          <span className="ml-2 text-blue-300 font-semibold">ETA {stopEtaMap[nextIdx]}</span>
+                        )}
+                      </>
                   }
-                  Next {run.runType === "backload" ? "Delivery" : "Drop"}{" "}
-                  <span className="font-semibold text-white">{withNickname(stops[nextIdx], nicknames)}</span>
-                  {stopEtaMap[nextIdx] && (
-                    <span className="ml-2 text-blue-300 font-semibold">ETA {stopEtaMap[nextIdx]}</span>
-                  )}
                 </div>
               )}
 

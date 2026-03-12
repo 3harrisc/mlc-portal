@@ -250,7 +250,8 @@ export async function GET(req: Request) {
       const nowMs = Date.now();
 
       // ── Backload collection tracking (at fromPostcode) ──
-      if (run.run_type === "backload" && !p.collected) {
+      // Keep tracking until both collected AND departed (need to detect departure)
+      if (run.run_type === "backload" && (!p.collected || !p.collectDepartedISO)) {
         const collPc = normalizePostcode(run.from_postcode ?? "");
         const collLL = collPc ? coordsMap.get(collPc) : null;
 

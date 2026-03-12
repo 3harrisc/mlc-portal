@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import * as XLSX from "xlsx";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { runToRow } from "@/types/runs";
@@ -33,7 +34,7 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Resolve a location name or postcode to a valid postcode */
+/** Resolve a location name or postcode to a valid postcode (sync — aliases only) */
 function resolveLocation(nameOrPostcode: string): string {
   if (!nameOrPostcode) return "";
   const trimmed = nameOrPostcode.trim();
@@ -49,6 +50,46 @@ function resolveLocation(nameOrPostcode: string): string {
     }
   }
   return trimmed;
+}
+
+/** Geocode a place name to a UK postcode via Mapbox */
+async function geocodeToPostcode(placeName: string): Promise<string | null> {
+  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  if (!token || !placeName) return null;
+
+  try {
+    const url =
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(placeName)}.json` +
+      `?country=gb&types=place,locality,poi,address&limit=1&access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    const feature = data?.features?.[0];
+    if (!feature) return null;
+
+    // Extract postcode from the context array
+    const pcContext = feature.context?.find((c: any) => c.id?.startsWith("postcode"));
+    if (pcContext?.text) return normalizePostcode(pcContext.text);
+
+    // Fallback: reverse geocode the center point to get a postcode
+    const [lng, lat] = feature.center ?? [];
+    if (lng != null && lat != null) {
+      const revUrl =
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
+        `?types=postcode&limit=1&access_token=${encodeURIComponent(token)}`;
+      const revRes = await fetch(revUrl, { cache: "no-store" });
+      if (revRes.ok) {
+        const revData = await revRes.json();
+        const pc = revData?.features?.[0]?.text;
+        if (pc) return normalizePostcode(pc);
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Strip HTML tags to plain text */
@@ -150,12 +191,46 @@ function getPdfAttachments(payload: any): PostmarkAttachment[] {
   );
 }
 
+/** Extract Excel attachments (.xls, .xlsx) from Postmark payload */
+function getExcelAttachments(payload: any): PostmarkAttachment[] {
+  const attachments: PostmarkAttachment[] = payload.Attachments ?? payload.attachments ?? [];
+  const excelTypes = [
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ];
+  return attachments.filter(
+    (a) =>
+      excelTypes.includes(a.ContentType) ||
+      a.Name?.toLowerCase().endsWith(".xls") ||
+      a.Name?.toLowerCase().endsWith(".xlsx")
+  );
+}
+
+/** Parse an Excel attachment (base64) into a plain-text representation for Claude */
+function excelToText(attachment: PostmarkAttachment): string {
+  const buf = Buffer.from(attachment.Content, "base64");
+  const workbook = XLSX.read(buf, { type: "buffer" });
+  const parts: string[] = [`[Excel file: ${attachment.Name}]`];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    parts.push(`\n--- Sheet: ${sheetName} ---`);
+    // Convert to CSV — preserves table structure for Claude to parse
+    const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+    if (csv.trim()) parts.push(csv);
+  }
+
+  return parts.join("\n");
+}
+
 /** Use Claude to parse email into multiple runs */
 async function parseEmailWithClaude(
   emailBody: string,
   subject: string,
   customerNames: string[],
-  pdfAttachments: PostmarkAttachment[] = []
+  pdfAttachments: PostmarkAttachment[] = [],
+  excelText: string = ""
 ): Promise<ParsedRun[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -218,12 +293,12 @@ ${depotList}
 - ALL runs in the same email are for the SAME date. Use the date from the table/header for ALL runs including backloads listed at the bottom
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array
-- Check BOTH the email body AND any attached PDF documents
+- Check BOTH the email body AND any attached PDF/Excel documents
 
 Email subject: ${subject}
 
 Email body:
-${emailBody}`;
+${emailBody}${excelText ? `\n\n--- ATTACHED EXCEL DATA ---\n${excelText}` : ""}`;
 
   // Build content blocks: text prompt + any PDF documents
   const contentBlocks: Anthropic.MessageCreateParams["messages"][0]["content"] = [];
@@ -339,16 +414,27 @@ export async function POST(req: Request) {
 
     const emailBody = textBody.trim() || stripHtml(htmlBody);
 
-    // 2b. Extract PDF attachments
+    // 2b. Extract PDF and Excel attachments
     const pdfAttachments = getPdfAttachments(payload);
+    const excelAttachments = getExcelAttachments(payload);
 
-    if (!emailBody && pdfAttachments.length === 0) {
+    // Parse Excel attachments into text so Claude can read them
+    let excelText = "";
+    for (const xl of excelAttachments) {
+      try {
+        excelText += (excelText ? "\n\n" : "") + excelToText(xl);
+      } catch {
+        // If Excel parsing fails, skip silently — log will capture the error downstream
+      }
+    }
+
+    if (!emailBody && pdfAttachments.length === 0 && !excelText) {
       await sb.from("email_logs").insert({
         from_address: fromAddress,
         subject,
         body: "",
         status: "error",
-        error: "Empty email body and no PDF attachments",
+        error: "Empty email body and no PDF/Excel attachments",
       });
       return NextResponse.json({ ok: true, message: "Empty email — skipped" });
     }
@@ -366,10 +452,11 @@ export async function POST(req: Request) {
     let parsedRuns: ParsedRun[];
     try {
       parsedRuns = await parseEmailWithClaude(
-        emailBody || "(see attached PDF)",
+        emailBody || (excelText ? "(see attached Excel)" : "(see attached PDF)"),
         subject,
         customerNames,
-        pdfAttachments
+        pdfAttachments,
+        excelText
       );
     } catch (parseErr: unknown) {
       const msg =
@@ -463,6 +550,12 @@ export async function POST(req: Request) {
           : (parsed.fromLocation
             ? resolveLocation(parsed.fromLocation)
             : normalizePostcode(BASE_POSTCODE));
+        // Geocode fallback for unresolved from location
+        if (fromPc && !/^[A-Z]{1,2}\d/i.test(fromPc)) {
+          const geocoded = await geocodeToPostcode(fromPc);
+          if (geocoded) fromPc = geocoded;
+          else fromPc = normalizePostcode(BASE_POSTCODE);
+        }
         toPc = fromPc; // return to base
       } else {
         // Backloads: from collection point, no return
@@ -471,6 +564,12 @@ export async function POST(req: Request) {
           : (parsed.fromLocation
             ? resolveLocation(parsed.fromLocation)
             : normalizePostcode(customerData?.base_postcode || BASE_POSTCODE));
+        // Geocode fallback for unresolved from location
+        if (fromPc && !/^[A-Z]{1,2}\d/i.test(fromPc)) {
+          const geocoded = await geocodeToPostcode(fromPc);
+          if (geocoded) fromPc = geocoded;
+          else fromPc = normalizePostcode(customerData?.base_postcode || BASE_POSTCODE);
+        }
         toPc = fromPc;
       }
 
@@ -480,25 +579,36 @@ export async function POST(req: Request) {
       let postcodeLines: string[] = [];
 
       if (parsed.deliveryPostcodes && parsed.deliveryPostcodes.length > 0) {
-        postcodeLines = parsed.deliveryPostcodes
-          .filter((p: any) => p.postcode)
-          .map((p: any) => {
-            // Resolve location names (e.g. "Middleton Foods") to postcodes via depot aliases
-            const pc = resolveLocation(p.postcode);
-            let line = p.time ? `${pc} ${p.time}` : pc;
-            if (p.ref) line += ` REF:${p.ref}`;
-            return line;
-          })
-          .filter((line) => /^[A-Z]{1,2}\d/i.test(line));
+        const resolvedLines: string[] = [];
+        for (const p of parsed.deliveryPostcodes) {
+          if (!p.postcode) continue;
+          let pc = resolveLocation(p.postcode);
+          // If alias lookup didn't resolve to a postcode, try geocoding
+          if (!/^[A-Z]{1,2}\d/i.test(pc)) {
+            const geocoded = await geocodeToPostcode(p.postcode);
+            if (geocoded) pc = geocoded;
+          }
+          if (!/^[A-Z]{1,2}\d/i.test(pc)) continue; // still not a postcode — skip
+          let line = p.time ? `${pc} ${p.time}` : pc;
+          if (p.ref) line += ` REF:${p.ref}`;
+          resolvedLines.push(line);
+        }
+        postcodeLines = resolvedLines;
       }
 
       // If no delivery postcodes but we have a destination, resolve it
       if (!postcodeLines.length) {
         // Try destination, then fromLocation (backloads may use fromLocation as the delivery point)
-        const destPc = parsed.destinationPostcode
+        let destPc = parsed.destinationPostcode
           ? resolveLocation(parsed.destinationPostcode)
           : resolveLocation(parsed.destination || "")
             || resolveLocation(parsed.fromLocation || "");
+
+        // Geocode fallback for unresolved destination names
+        if (destPc && !/^[A-Z]{1,2}\d/i.test(destPc)) {
+          const geocoded = await geocodeToPostcode(destPc);
+          if (geocoded) destPc = geocoded;
+        }
 
         if (destPc && /^[A-Z]{1,2}\d/i.test(destPc)) {
           // Use delivery time for the destination stop (not collection time)

@@ -895,6 +895,37 @@ export default function RunDetailPage() {
     setRun((prev) => prev ? { ...prev, completedStopIndexes: [], completedMeta: {} } : prev);
   }
 
+  /** Update a delivery stop's booking time in rawText. Pass empty string to clear. */
+  function updateStopBookingTime(stopIdx: number, newTime: string) {
+    if (!run || !isAdmin) return;
+    const lines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    let lineIdx = 0;
+    let currentStop = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(lines[i])) {
+        if (currentStop === stopIdx) { lineIdx = i; break; }
+        currentStop++;
+      }
+    }
+    if (currentStop !== stopIdx) return;
+
+    let line = lines[lineIdx];
+    // Remove existing time (HH:MM pattern that isn't part of a postcode or REF: or ADDR:)
+    line = line.replace(/\s+\d{1,2}:\d{2}(?=\s|$|(\s+REF:)|(\s+ADDR:))/, "");
+    // Insert new time after the postcode
+    if (newTime) {
+      const pcMatch = line.match(/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i);
+      if (pcMatch) {
+        const insertPos = (pcMatch.index ?? 0) + pcMatch[0].length;
+        line = line.slice(0, insertPos) + ` ${newTime}` + line.slice(insertPos);
+      }
+    }
+    lines[lineIdx] = line;
+    const newRawText = lines.join("\n");
+    setRun({ ...run, rawText: newRawText });
+    updateRunAction(run.id, { rawText: newRawText });
+  }
+
   async function handleDeleteRun() {
     if (!run || !isAdmin) return;
     if (!confirm("Are you sure you want to delete this run? This cannot be undone.")) return;
@@ -1677,17 +1708,40 @@ export default function RunDetailPage() {
                           {isCollectionStop && <span className="text-xs text-purple-300 font-normal mr-1">Collection:</span>}
                           {withNickname(pc, nicknames)}
                           {isCollectionStop && status !== "completed" && (
-                            run.collectionTime
+                            isAdmin ? (
+                              <span className="ml-2 inline-flex items-center gap-1">
+                                <span className="text-xs text-gray-500">Collect:</span>
+                                <input
+                                  type="time"
+                                  value={run.collectionTime || ""}
+                                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
+                                  className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
+                                />
+                                {!run.collectionTime && <span className="text-xs text-gray-500">open</span>}
+                              </span>
+                            ) : run.collectionTime
                               ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {run.collectionTime}</span>
                               : stopEtaMap[idx]
                               ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
                               : <span className="ml-2 text-sm text-gray-500 font-normal">Open booking</span>
                           )}
-                          {!isCollectionStop && status !== "completed" && stopBookingTimes.has(idx) && (
-                            <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
-                          )}
-                          {!isCollectionStop && status !== "completed" && !stopBookingTimes.has(idx) && stopEtaMap[idx] && (
-                            <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                          {!isCollectionStop && status !== "completed" && (
+                            isAdmin ? (
+                              <span className="ml-2 inline-flex items-center gap-1">
+                                <span className="text-xs text-gray-500">Delivery:</span>
+                                <input
+                                  type="time"
+                                  value={stopBookingTimes.get(idx) || ""}
+                                  onChange={(e) => updateStopBookingTime(idx, e.target.value)}
+                                  className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
+                                />
+                                {!stopBookingTimes.has(idx) && <span className="text-xs text-gray-500">open</span>}
+                              </span>
+                            ) : stopBookingTimes.has(idx)
+                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                              : stopEtaMap[idx]
+                              ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                              : null
                           )}
                         </div>
                         {stopRefs.get(idx) && (

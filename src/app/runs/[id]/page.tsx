@@ -1869,13 +1869,13 @@ export default function RunDetailPage() {
                     ? "bg-blue-500/15 border-blue-500/30 text-blue-200"
                     : "bg-white/5 border-white/10 text-gray-300";
 
-                const isCollectionStop = run.runType === "backload" && idx === 0;
-                const badgeText = isCollectionStop
-                  ? status === "completed" ? "COLLECTED" : status === "on_site" ? "COLLECTING" : "AWAITING COLLECTION"
-                  : status === "completed"
+                // For backloads, all stops in this list are DELIVERY stops
+                // (collection is shown separately above)
+                const isCollectionStop = false;
+                const badgeText = status === "completed"
                     ? (run.runType === "backload" ? "DELIVERED" : "COMPLETED")
                     : status === "on_site" ? "ON SITE" : isNext ? "NEXT" : "PENDING";
-                const stopNumber = isCollectionStop ? "C" : idx;
+                const stopNumber = idx;
 
                 return (
                   <div

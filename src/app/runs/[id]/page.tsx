@@ -59,7 +59,24 @@ const DEFAULT_PROGRESS: ProgressState = {
   lastInside: false,
 };
 
-async function geocodePostcode(postcode: string, mapboxToken: string): Promise<LngLat> {
+async function geocodePostcode(postcode: string, mapboxToken: string, address?: string): Promise<LngLat> {
+  // If a full address is available, use it for more precise geocoding (exact building vs postcode centroid)
+  if (address) {
+    try {
+      const addrUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+        address
+      )}.json?access_token=${encodeURIComponent(mapboxToken)}&country=gb&types=address,poi&limit=1`;
+      const addrRes = await fetch(addrUrl, { cache: "no-store" });
+      if (addrRes.ok) {
+        const addrData = await addrRes.json();
+        const ac = addrData?.features?.[0]?.center;
+        if (Array.isArray(ac) && ac.length >= 2) return { lng: ac[0], lat: ac[1] };
+      }
+    } catch {
+      // Fall through to postcode geocoding
+    }
+  }
+
   const pc = normalizePostcode(postcode);
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
     pc
@@ -375,9 +392,9 @@ export default function RunDetailPage() {
         stopIdx++;
       }
     }
-    // Use collectionTime as the authoritative booking time for the first stop
-    // (the raw text time may differ due to email parsing errors)
-    if (run.collectionTime) {
+    // For regular (non-backload) runs: collectionTime is a chain anchor booking for stop 0
+    // For backloads: collection booking is separate (run.collectionTime), delivery from rawText only
+    if (run.runType !== "backload" && run.collectionTime && !times.has(0)) {
       times.set(0, run.collectionTime);
     }
     return times;
@@ -407,9 +424,10 @@ export default function RunDetailPage() {
       returnToBase: updated.returnToBase,
       customer: updated.customer,
       collectionTime: updated.collectionTime ?? null,
+      runType: updated.runType,
+      collectionDate: updated.collectionDate ?? null,
       ...extraFields,
     };
-    if (updated.collectionDate) fields.collectionDate = updated.collectionDate;
     updateRunAction(updated.id, fields);
   }
 
@@ -425,7 +443,7 @@ export default function RunDetailPage() {
     }, 2000);
   }
 
-  async function ensureCoords(postcodes: string[]) {
+  async function ensureCoords(postcodes: string[], addressByPc?: Record<string, string>) {
     if (!mapboxToken) throw new Error("Missing NEXT_PUBLIC_MAPBOX_TOKEN.");
     const unique = Array.from(new Set(postcodes.map(normalizePostcode))).filter(Boolean);
 
@@ -440,7 +458,8 @@ export default function RunDetailPage() {
         continue;
       }
 
-      const ll = await geocodePostcode(pc, mapboxToken);
+      const addr = addressByPc?.[pc];
+      const ll = await geocodePostcode(pc, mapboxToken, addr);
       geoCacheRef.current.set(pc, ll);
       next[pc] = ll;
     }
@@ -448,6 +467,20 @@ export default function RunDetailPage() {
     setCoordsByPostcode(next);
     return next;
   }
+
+  // Extract ADDR: tags from rawText for precise geocoding
+  const addressByPostcode = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (!run?.rawText) return map;
+    for (const line of run.rawText.split(/\r?\n/)) {
+      const addrMatch = line.match(/ADDR:(.+?)$/i);
+      const pcMatch = line.match(/\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})\b/i);
+      if (addrMatch && pcMatch) {
+        map[normalizePostcode(pcMatch[1])] = addrMatch[1].trim();
+      }
+    }
+    return map;
+  }, [run?.rawText]);
 
   // pre-geocode
   useEffect(() => {
@@ -462,7 +495,7 @@ export default function RunDetailPage() {
 
     if (!pcs.length) return;
 
-    ensureCoords(pcs).catch(() => {});
+    ensureCoords(pcs, addressByPostcode).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id, mapboxToken, stops.join("|")]);
 
@@ -500,30 +533,32 @@ export default function RunDetailPage() {
 
     async function compute() {
       const fromLL = coordsByPostcode[fromPc];
-      const remainingWithCoords = remaining.map((s) => ({
-        postcode: s.pc,
-        coord: coordsByPostcode[s.pc],
-      }));
+      const [y, mo, d] = currentRun.date.split("-").map(Number);
+
+      // Attach minArriveAt for stops that have a booking time.
+      // - Collection stop (backload idx 0): uses run.collectionTime
+      // - Delivery stops: uses per-stop booking time from rawText (stopBookingTimes)
+      const remainingWithCoords = remaining.map((s) => {
+        const isBackloadCollection = currentRun.runType === "backload" && s.i === 0;
+        const bookingHHMM = isBackloadCollection
+          ? currentRun.collectionTime
+          : stopBookingTimes.get(s.i);
+        let minArriveAt: Date | undefined;
+        if (bookingHHMM) {
+          const [bh, bm] = bookingHHMM.split(":").map(Number);
+          minArriveAt = new Date(y, mo - 1, d, bh, bm, 0);
+        }
+        return { postcode: s.pc, coord: coordsByPostcode[s.pc], minArriveAt };
+      });
 
       let startPos: LngLat;
       let startAt: Date;
 
       if (isFutureRun || !vehicleSnap) {
-        const [y, mo, d] = currentRun.date.split("-").map(Number);
-
-        // If this run has a booking time, start the ETA chain from the first
-        // stop's position at the booking time (driver arrives there at that time)
-        if (currentRun.collectionTime && remaining.length > 0) {
-          const firstStopCoord = coordsByPostcode[remaining[0].pc];
-          startPos = firstStopCoord || fromLL;
-          const [hh, mm] = currentRun.collectionTime.split(":").map(Number);
-          startAt = new Date(y, mo - 1, d, hh, mm, 0);
-        } else {
-          startPos = fromLL;
-          const effectiveStart = chainedStartTime || currentRun.startTime || "08:00";
-          const [hh, mm] = effectiveStart.split(":").map(Number);
-          startAt = new Date(y, mo - 1, d, hh, mm, 0);
-        }
+        startPos = fromLL;
+        const effectiveStart = chainedStartTime || currentRun.startTime || "08:00";
+        const [hh, mm] = effectiveStart.split(":").map(Number);
+        startAt = new Date(y, mo - 1, d, hh, mm, 0);
       } else {
         startPos = { lng: vehicleSnap.lng, lat: vehicleSnap.lat };
         startAt = new Date();
@@ -792,7 +827,18 @@ export default function RunDetailPage() {
 
         const { mins, km } = await getDirectionsLeg(vehicleLL, nextLL2, mapboxToken);
         const breakMins = addBreaksIfNeeded(mins, run.includeBreaks);
-        const totalMins = mins + breakMins;
+        let totalMins = mins + breakMins;
+
+        // For backload runs: if the collection booking time hasn't passed yet, the driver
+        // can't have departed the collection site. Add remaining wait to the ETA.
+        if (run.runType === "backload" && run.collectionTime && nsi2 > 0) {
+          const [y, mo, d] = run.date.split("-").map(Number);
+          const [bh, bm] = run.collectionTime.split(":").map(Number);
+          const earliestDepartureMs =
+            new Date(y, mo - 1, d, bh, bm, 0).getTime() + (run.serviceMins ?? 0) * 60_000;
+          const waitMins = Math.ceil((earliestDepartureMs - Date.now()) / 60_000);
+          if (waitMins > 0) totalMins += waitMins;
+        }
 
         const eta = etaFromNowPlusMinutes(totalMins, cutoffMins);
 
@@ -913,6 +959,37 @@ export default function RunDetailPage() {
     // Also clear completed_stop_indexes + completed_meta
     updateRunAction(run.id, { completedStopIndexes: [], completedMeta: {} });
     setRun((prev) => prev ? { ...prev, completedStopIndexes: [], completedMeta: {} } : prev);
+  }
+
+  /** Update a delivery stop's booking time in rawText. Pass empty string to clear. */
+  function updateStopBookingTime(stopIdx: number, newTime: string) {
+    if (!run || !isAdmin) return;
+    const lines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    let lineIdx = 0;
+    let currentStop = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(lines[i])) {
+        if (currentStop === stopIdx) { lineIdx = i; break; }
+        currentStop++;
+      }
+    }
+    if (currentStop !== stopIdx) return;
+
+    let line = lines[lineIdx];
+    // Remove existing time (HH:MM pattern that isn't part of a postcode or REF: or ADDR:)
+    line = line.replace(/\s+\d{1,2}:\d{2}(?=\s|$|(\s+REF:)|(\s+ADDR:))/, "");
+    // Insert new time after the postcode
+    if (newTime) {
+      const pcMatch = line.match(/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i);
+      if (pcMatch) {
+        const insertPos = (pcMatch.index ?? 0) + pcMatch[0].length;
+        line = line.slice(0, insertPos) + ` ${newTime}` + line.slice(insertPos);
+      }
+    }
+    lines[lineIdx] = line;
+    const newRawText = lines.join("\n");
+    setRun({ ...run, rawText: newRawText });
+    updateRunAction(run.id, { rawText: newRawText });
   }
 
   async function handleDeleteRun() {
@@ -1288,15 +1365,17 @@ export default function RunDetailPage() {
                 className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
               />
             </div>
-            <div>
-              <label className="block text-gray-500 mb-1">Booking time</label>
-              <input
-                type="time"
-                value={run.collectionTime || ""}
-                onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
-                className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
-              />
-            </div>
+            {run.runType !== "backload" && (
+              <div>
+                <label className="block text-gray-500 mb-1">Booking time</label>
+                <input
+                  type="time"
+                  value={run.collectionTime || ""}
+                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
+                  className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+                />
+              </div>
+            )}
             <div>
               <label className="block text-gray-500 mb-1">Service (mins)</label>
               <input
@@ -1346,6 +1425,17 @@ export default function RunDetailPage() {
                   type="date"
                   value={run.collectionDate || ""}
                   onChange={(e) => persist({ ...run, collectionDate: e.target.value || undefined })}
+                  className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
+                />
+              </div>
+            )}
+            {run.runType === "backload" && (
+              <div>
+                <label className="block text-gray-500 mb-1">Collection time <span className="text-gray-600">(leave blank = open booking)</span></label>
+                <input
+                  type="time"
+                  value={run.collectionTime || ""}
+                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
                   className="w-full bg-transparent border border-white/15 rounded-lg px-3 py-1.5 text-white"
                 />
               </div>
@@ -1779,10 +1869,13 @@ export default function RunDetailPage() {
                     ? "bg-blue-500/15 border-blue-500/30 text-blue-200"
                     : "bg-white/5 border-white/10 text-gray-300";
 
-                const badgeText =
-                  status === "completed"
+                const isCollectionStop = run.runType === "backload" && idx === 0;
+                const badgeText = isCollectionStop
+                  ? status === "completed" ? "COLLECTED" : status === "on_site" ? "COLLECTING" : "AWAITING COLLECTION"
+                  : status === "completed"
                     ? (run.runType === "backload" ? "DELIVERED" : "COMPLETED")
                     : status === "on_site" ? "ON SITE" : isNext ? "NEXT" : "PENDING";
+                const stopNumber = isCollectionStop ? "C" : idx;
 
                 return (
                   <div
@@ -1790,18 +1883,49 @@ export default function RunDetailPage() {
                     className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-semibold">
-                        {idx + 1}
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${isCollectionStop ? "bg-purple-500/20" : "bg-white/10"}`}>
+                        {stopNumber}
                       </div>
 
                       <div>
                         <div className="font-semibold">
+                          {isCollectionStop && <span className="text-xs text-purple-300 font-normal mr-1">Collection:</span>}
                           {withNickname(pc, nicknames)}
-                          {status !== "completed" && stopBookingTimes.has(idx) && (
-                            <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                          {isCollectionStop && status !== "completed" && (
+                            isAdmin ? (
+                              <span className="ml-2 inline-flex items-center gap-1">
+                                <span className="text-xs text-gray-500">Collect:</span>
+                                <input
+                                  type="time"
+                                  value={run.collectionTime || ""}
+                                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
+                                  className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
+                                />
+                                {!run.collectionTime && <span className="text-xs text-gray-500">open</span>}
+                              </span>
+                            ) : run.collectionTime
+                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {run.collectionTime}</span>
+                              : stopEtaMap[idx]
+                              ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                              : <span className="ml-2 text-sm text-gray-500 font-normal">Open booking</span>
                           )}
-                          {status !== "completed" && !stopBookingTimes.has(idx) && stopEtaMap[idx] && (
-                            <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                          {!isCollectionStop && status !== "completed" && (
+                            isAdmin ? (
+                              <span className="ml-2 inline-flex items-center gap-1">
+                                <span className="text-xs text-gray-500">Delivery:</span>
+                                <input
+                                  type="time"
+                                  value={stopBookingTimes.get(idx) || ""}
+                                  onChange={(e) => updateStopBookingTime(idx, e.target.value)}
+                                  className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
+                                />
+                                {!stopBookingTimes.has(idx) && <span className="text-xs text-gray-500">open</span>}
+                              </span>
+                            ) : stopBookingTimes.has(idx)
+                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                              : stopEtaMap[idx]
+                              ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                              : null
                           )}
                         </div>
                         {stopRefs.get(idx) && (
@@ -1864,9 +1988,9 @@ export default function RunDetailPage() {
                           {status !== "completed" ? (
                             <button
                               onClick={() => adminMarkCompleted(idx)}
-                              className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
+                              className={`px-3 py-2 rounded-lg border text-sm ${isCollectionStop ? "border-amber-500/30 hover:bg-amber-500/10 text-amber-300" : "border-white/15 hover:bg-white/10"}`}
                             >
-                              Mark complete
+                              {isCollectionStop ? "Mark Collected" : "Mark complete"}
                             </button>
                           ) : (
                             <button

@@ -69,9 +69,9 @@ function estimateTravelMins(
 
 /**
  * Compute a run's finish time in minutes.
- * If the run has a booking time (collectionTime), that IS the arrival at the first stop —
- * so finish = booking time + service + return, skipping drive-time calculation.
- * Otherwise falls back to start + drive + service + breaks + return.
+ * When live progress is available (completedStopIndexes), estimates from NOW
+ * based on remaining stops — much more accurate for in-progress runs.
+ * Otherwise falls back to planned schedule estimate.
  */
 function runFinishMins(run: PlannedRun, startMins: number): {
   finishMins: number;
@@ -82,16 +82,45 @@ function runFinishMins(run: PlannedRun, startMins: number): {
     return { finishMins: startMins, lastPostcode: run.fromPostcode };
   }
 
+  const completedCount = run.completedStopIndexes?.length ?? 0;
+  const remainingCount = stops.length - completedCount;
+
+  // If run is in progress (some stops completed but not all), estimate from NOW
+  if (completedCount > 0 && remainingCount > 0) {
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const remainDrive = remainingCount * AVG_DRIVE_PER_STOP;
+    const remainService = remainingCount * run.serviceMins;
+    const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
+    const finishMins = nowMins + remainDrive + remainService + returnLeg;
+
+    const lastPostcode = run.returnToBase
+      ? run.fromPostcode
+      : (stops[stops.length - 1] || run.fromPostcode);
+
+    return { finishMins, lastPostcode };
+  }
+
+  // All stops completed — run is done, finish = now
+  if (completedCount > 0 && remainingCount <= 0) {
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
+    const lastPostcode = run.returnToBase
+      ? run.fromPostcode
+      : (stops[stops.length - 1] || run.fromPostcode);
+    return { finishMins: nowMins + returnLeg, lastPostcode };
+  }
+
+  // Not started — use planned schedule
   const bookingMins = run.collectionTime ? timeToMinutes(run.collectionTime) : null;
 
   let finishMins: number;
   if (bookingMins != null) {
-    // Booking time = arrival at first stop. Service at each stop, then optional return.
     const serviceTotal = stops.length * run.serviceMins;
     const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
     finishMins = bookingMins + serviceTotal + returnLeg;
   } else {
-    // No booking time — estimate from start + drive + service + breaks + return
     const totalDrive = stops.length * AVG_DRIVE_PER_STOP;
     const totalService = stops.length * run.serviceMins;
     let breakMins = 0;

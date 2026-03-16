@@ -148,21 +148,23 @@ export function computeChainedStarts(
       const { finishMins: prevFinishMins, lastPostcode: prevLastPc } =
         runFinishMins(prev, prevStartMins);
 
+      // Chain from previous run's finish + travel time
+      const nextFromPc = cur.fromPostcode;
+      const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
+      const earliestArrival = prevFinishMins + travelToNext;
+
       if (curBookingMins != null) {
-        // This run has a booking time — the driver WILL be at the first delivery
-        // at the booking time, regardless of what the previous run's finish says.
+        // Has a booking time — use whichever is LATER: booking time or
+        // when the driver can actually arrive from the previous run
+        const effectiveStart = Math.max(earliestArrival, curBookingMins);
         result.set(cur.id, {
-          chainedStartTime: cur.collectionTime!,
+          chainedStartTime: minutesToTime(effectiveStart),
           chainedFromPostcode: prevLastPc,
         });
       } else {
         // No booking time — chain from previous run's finish + travel
-        const nextFromPc = cur.fromPostcode;
-        const travelToNext = estimateTravelMins(prevLastPc, nextFromPc, coords);
-        const effectiveStart = prevFinishMins + travelToNext;
-
         result.set(cur.id, {
-          chainedStartTime: minutesToTime(effectiveStart),
+          chainedStartTime: minutesToTime(earliestArrival),
           chainedFromPostcode: prevLastPc,
         });
       }

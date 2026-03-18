@@ -1867,6 +1867,7 @@ export default function RunDetailPage() {
               {stops.map((pc, idx) => {
                 const status = stopStatuses[idx] ?? "pending";
                 const isNext = nextIdx === idx;
+                const isNextDay = isFutureRun && !!(stopEtaMap[idx] || "").startsWith("Next day");
 
                 const badge =
                   status === "completed"
@@ -1877,47 +1878,29 @@ export default function RunDetailPage() {
                     ? "bg-blue-500/15 border-blue-500/30 text-blue-200"
                     : "bg-white/5 border-white/10 text-gray-300";
 
-                // For backloads, all stops in this list are DELIVERY stops
-                // (collection is shown separately above)
-                const isCollectionStop = false;
                 const badgeText = status === "completed"
                     ? (run.runType === "backload" ? "DELIVERED" : "COMPLETED")
                     : status === "on_site" ? "ON SITE" : isNext ? "NEXT" : "PENDING";
-                const stopNumber = idx;
 
                 return (
                   <div
                     key={`${pc}-${idx}`}
-                    className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap"
+                    className={`border rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap ${isNextDay ? "border-orange-500/30 bg-orange-500/5" : "border-white/10"}`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${isCollectionStop ? "bg-purple-500/20" : "bg-white/10"}`}>
-                        {stopNumber}
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${isNextDay ? "bg-orange-500/20 text-orange-300" : "bg-white/10"}`}>
+                        {idx}
                       </div>
 
                       <div>
                         <div className="font-semibold">
-                          {isCollectionStop && <span className="text-xs text-purple-300 font-normal mr-1">Collection:</span>}
                           {withNickname(pc, nicknames)}
-                          {isCollectionStop && status !== "completed" && (
-                            isAdmin ? (
-                              <span className="ml-2 inline-flex items-center gap-1">
-                                <span className="text-xs text-gray-500">Collect:</span>
-                                <input
-                                  type="time"
-                                  value={run.collectionTime || ""}
-                                  onChange={(e) => persist({ ...run, collectionTime: e.target.value || undefined })}
-                                  className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
-                                />
-                                {!run.collectionTime && <span className="text-xs text-gray-500">open</span>}
-                              </span>
-                            ) : run.collectionTime
-                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {run.collectionTime}</span>
-                              : stopEtaMap[idx]
-                              ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
-                              : <span className="ml-2 text-sm text-gray-500 font-normal">Open booking</span>
+                          {isNextDay && (
+                            <span className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-orange-300 text-xs font-semibold">
+                              &#x1F319; Next day
+                            </span>
                           )}
-                          {!isCollectionStop && status !== "completed" && (
+                          {status !== "completed" && (
                             isAdmin ? (
                               <span className="ml-2 inline-flex items-center gap-1">
                                 <span className="text-xs text-gray-500">Delivery:</span>
@@ -1996,9 +1979,9 @@ export default function RunDetailPage() {
                           {status !== "completed" ? (
                             <button
                               onClick={() => adminMarkCompleted(idx)}
-                              className={`px-3 py-2 rounded-lg border text-sm ${isCollectionStop ? "border-amber-500/30 hover:bg-amber-500/10 text-amber-300" : "border-white/15 hover:bg-white/10"}`}
+                              className="px-3 py-2 rounded-lg border text-sm border-white/15 hover:bg-white/10"
                             >
-                              {isCollectionStop ? "Mark Collected" : "Mark complete"}
+                              Mark complete
                             </button>
                           ) : (
                             <button

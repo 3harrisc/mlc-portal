@@ -4,6 +4,25 @@ import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
 import { MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS } from "@/lib/constants";
 import { haversineKm, type LngLat } from "@/lib/geo-utils";
 
+/** Parse per-stop booking times from rawText lines (e.g. "BS20 7XN 08:00" → {0: 480}) */
+function parseStopBookingTimes(rawText: string): Map<number, number> {
+  const times = new Map<number, number>();
+  const lines = (rawText || "").split(/\r?\n/).filter(Boolean);
+  let stopIdx = 0;
+  for (const line of lines) {
+    const hasPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line);
+    if (hasPostcode) {
+      const timeMatch = line.match(/\b(\d{1,2}:\d{2})\b/);
+      if (timeMatch) {
+        const mins = timeToMinutes(timeMatch[1]);
+        if (mins != null) times.set(stopIdx, mins);
+      }
+      stopIdx++;
+    }
+  }
+  return times;
+}
+
 /** Avg drive time between two postcodes (rough estimate, no API call) */
 const AVG_DRIVE_PER_STOP = 20; // mins
 /** Fallback travel time when coords are unavailable */
@@ -113,13 +132,33 @@ function runFinishMins(run: PlannedRun, startMins: number): {
   }
 
   // Not started — use planned schedule
-  const bookingMins = run.collectionTime ? timeToMinutes(run.collectionTime) : null;
+  // Check per-stop delivery booking times from rawText (e.g. "BS20 7XN 08:00")
+  const perStopBookings = parseStopBookingTimes(run.rawText);
+  // Also consider run-level collectionTime (for backloads or as stop 0 anchor)
+  if (run.collectionTime && !perStopBookings.has(0)) {
+    const ct = timeToMinutes(run.collectionTime);
+    if (ct != null) perStopBookings.set(0, ct);
+  }
+
+  // Find the latest booking time across all stops
+  let latestBookingMins: number | null = null;
+  let latestBookingIdx = -1;
+  for (const [idx, mins] of perStopBookings) {
+    if (latestBookingMins == null || mins > latestBookingMins) {
+      latestBookingMins = mins;
+      latestBookingIdx = idx;
+    }
+  }
 
   let finishMins: number;
-  if (bookingMins != null) {
-    const serviceTotal = stops.length * run.serviceMins;
+  if (latestBookingMins != null) {
+    // From the latest booked stop: booking time + service at that stop
+    // + remaining stops after it (drive + service each) + return leg
+    const stopsAfterBooking = stops.length - latestBookingIdx - 1;
+    const remainDrive = stopsAfterBooking * AVG_DRIVE_PER_STOP;
+    const remainService = stopsAfterBooking * run.serviceMins;
     const returnLeg = run.returnToBase ? AVG_DRIVE_PER_STOP : 0;
-    finishMins = bookingMins + serviceTotal + returnLeg;
+    finishMins = latestBookingMins + run.serviceMins + remainDrive + remainService + returnLeg;
   } else {
     const totalDrive = stops.length * AVG_DRIVE_PER_STOP;
     const totalService = stops.length * run.serviceMins;

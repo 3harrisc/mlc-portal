@@ -1867,7 +1867,7 @@ export default function RunDetailPage() {
               {stops.map((pc, idx) => {
                 const status = stopStatuses[idx] ?? "pending";
                 const isNext = nextIdx === idx;
-                const isNextDay = isFutureRun && !!(stopEtaMap[idx] || "").startsWith("Next day");
+                const isNextDay = !!(stopEtaMap[idx] || "").startsWith("Next day");
 
                 const badge =
                   status === "completed"
@@ -1911,12 +1911,20 @@ export default function RunDetailPage() {
                                   className="bg-transparent border border-white/15 rounded px-1.5 py-0.5 text-sm text-amber-300 w-[5.5rem]"
                                 />
                                 {!stopBookingTimes.has(idx) && <span className="text-xs text-gray-500">open</span>}
+                                {stopEtaMap[idx] && (
+                                  <span className="text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                                )}
                               </span>
-                            ) : stopBookingTimes.has(idx)
-                              ? <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
-                              : stopEtaMap[idx]
-                              ? <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
-                              : null
+                            ) : (
+                              <>
+                                {stopBookingTimes.has(idx) && (
+                                  <span className="ml-2 text-sm text-amber-300 font-normal">Booking {stopBookingTimes.get(idx)}</span>
+                                )}
+                                {stopEtaMap[idx] && (
+                                  <span className="ml-2 text-sm text-blue-300 font-normal">ETA {stopEtaMap[idx]}</span>
+                                )}
+                              </>
+                            )
                           )}
                         </div>
                         {stopRefs.get(idx) && (

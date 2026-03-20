@@ -192,7 +192,7 @@ export default function RunDetailPage() {
   const nicknames = useNicknames();
 
   const [editingOrder, setEditingOrder] = useState(false);
-  const [editStops, setEditStops] = useState<{ id: string; postcode: string }[]>([]);
+  const [editStops, setEditStops] = useState<{ id: string; postcode: string; rawLine: string }[]>([]);
   const [reRouting, setReRouting] = useState(false);
   const [addingDrop, setAddingDrop] = useState(false);
   const [newDropPC, setNewDropPC] = useState("");
@@ -1016,6 +1016,25 @@ export default function RunDetailPage() {
       const allCoords = await ensureCoords([fromPC, ...stops]);
       const startLL = allCoords[fromPC];
 
+      // Build postcode→rawLine mapping to preserve booking times, refs, addresses
+      const rawLines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+      const lineByPostcode = new Map<string, string[]>();
+      for (const line of rawLines) {
+        const pc = /\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})\b/i.exec(line)?.[1]?.toUpperCase().replace(/\s+/g, " ");
+        if (pc) {
+          if (!lineByPostcode.has(pc)) lineByPostcode.set(pc, []);
+          lineByPostcode.get(pc)!.push(line.trim());
+        }
+      }
+      const usedLines = new Map<string, number>();
+      function getFullLine(postcode: string): string {
+        const norm = postcode.toUpperCase().replace(/\s+/g, " ");
+        const lines = lineByPostcode.get(norm) || [];
+        const idx = usedLines.get(norm) || 0;
+        usedLines.set(norm, idx + 1);
+        return lines[idx] || postcode;
+      }
+
       // Nearest-neighbor ordering
       const remaining = stops.slice();
       const ordered: string[] = [];
@@ -1038,7 +1057,7 @@ export default function RunDetailPage() {
         current = allCoords[next];
       }
 
-      const newRawText = ordered.join("\n");
+      const newRawText = ordered.map(pc => getFullLine(pc)).join("\n");
       const resetProgress: ProgressState = { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false };
       await updateRunAction(run.id, { rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
       setRun({ ...run, rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
@@ -1059,13 +1078,20 @@ export default function RunDetailPage() {
     const pc = normalizePostcode(newDropPC.trim());
     if (!pc) return;
 
-    const currentStops = [...stops];
-    const insertAt = newDropPos < 0 || newDropPos > currentStops.length
-      ? currentStops.length
+    // Preserve existing rawText lines and insert new postcode at correct position
+    const rawLines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    const existingLines: string[] = [];
+    for (const line of rawLines) {
+      if (/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line)) {
+        existingLines.push(line.trim());
+      }
+    }
+    const insertAt = newDropPos < 0 || newDropPos > existingLines.length
+      ? existingLines.length
       : newDropPos;
 
-    currentStops.splice(insertAt, 0, pc);
-    const newRawText = currentStops.join("\n");
+    existingLines.splice(insertAt, 0, pc);
+    const newRawText = existingLines.join("\n");
 
     // Shift all index-based tracking data at or after insertion point
     const shiftIdx = (idx: number) => idx >= insertAt ? idx + 1 : idx;
@@ -1117,9 +1143,16 @@ export default function RunDetailPage() {
     if (!run || !isAdmin) return;
     if (!confirm(`Remove stop ${removeIdx + 1} (${stops[removeIdx]}) from this run?`)) return;
 
-    const currentStops = [...stops];
-    currentStops.splice(removeIdx, 1);
-    const newRawText = currentStops.join("\n");
+    // Preserve full rawText lines when removing a stop
+    const rawLines = (run.rawText || "").split(/\r?\n/).filter(Boolean);
+    const postcodeLines: string[] = [];
+    for (const line of rawLines) {
+      if (/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/i.test(line)) {
+        postcodeLines.push(line.trim());
+      }
+    }
+    postcodeLines.splice(removeIdx, 1);
+    const newRawText = postcodeLines.join("\n");
 
     // Shift all index-based tracking data: indexes above removeIdx shift down by 1
     const unshiftIdx = (idx: number) => idx > removeIdx ? idx - 1 : idx;
@@ -1180,7 +1213,26 @@ export default function RunDetailPage() {
 
   function handleStartEditOrder() {
     if (!isAdmin) return;
-    setEditStops(stops.map((pc, i) => ({ id: `stop-${i}`, postcode: pc })));
+    // Build mapping from postcode to full rawText line so reorder preserves booking times, refs, addresses
+    const rawLines = (run?.rawText || "").split(/\r?\n/).filter(Boolean);
+    const lineByPostcode = new Map<string, string[]>();
+    for (const line of rawLines) {
+      const pc = /\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})\b/i.exec(line)?.[1]?.toUpperCase().replace(/\s+/g, " ");
+      if (pc) {
+        if (!lineByPostcode.has(pc)) lineByPostcode.set(pc, []);
+        lineByPostcode.get(pc)!.push(line.trim());
+      }
+    }
+    // Match each stop to its full rawText line (consuming in order for duplicates)
+    const used = new Map<string, number>();
+    setEditStops(stops.map((pc, i) => {
+      const norm = pc.toUpperCase().replace(/\s+/g, " ");
+      const lines = lineByPostcode.get(norm) || [];
+      const useIdx = used.get(norm) || 0;
+      used.set(norm, useIdx + 1);
+      const rawLine = lines[useIdx] || pc;
+      return { id: `stop-${i}`, postcode: pc, rawLine };
+    }));
     setEditingOrder(true);
   }
 
@@ -1201,7 +1253,7 @@ export default function RunDetailPage() {
 
   async function handleSaveOrder() {
     if (!run || !isAdmin) return;
-    const newRawText = editStops.map((s) => s.postcode).join("\n");
+    const newRawText = editStops.map((s) => s.rawLine).join("\n");
     const resetProgress: ProgressState = { completedIdx: [], onSiteIdx: null, onSiteSinceMs: null, lastInside: false };
     await updateRunAction(run.id, { rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });
     setRun({ ...run, rawText: newRawText, progress: resetProgress, completedStopIndexes: [], completedMeta: {} });

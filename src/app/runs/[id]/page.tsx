@@ -263,22 +263,26 @@ export default function RunDetailPage() {
     const supabase = createClient();
     const vehicle = run.vehicle.trim();
 
-    // Determine which dates to query - delivery date + collection date if different
-    const dates = [run.date];
-    if (run.collectionDate && run.collectionDate !== run.date) {
-      dates.push(run.collectionDate);
-    }
+    // Determine which dates to query - delivery date + collection date + day before collection
+    // (to find multi-day runs that started the day before but finish on the collection date)
+    const dates = new Set([run.date]);
+    const collDate = run.collectionDate || run.date;
+    dates.add(collDate);
+    // Add the day before collection to catch 2-day runs that started yesterday
+    const prevDay = new Date(collDate + "T00:00:00");
+    prevDay.setDate(prevDay.getDate() - 1);
+    dates.add(prevDay.toISOString().slice(0, 10));
 
     supabase
       .from("runs")
       .select("*")
       .eq("vehicle", vehicle)
-      .or(dates.map((d) => `date.eq.${d},collection_date.eq.${d}`).join(","))
+      .or([...dates].map((d) => `date.eq.${d},collection_date.eq.${d}`).join(","))
       .order("run_order", { ascending: true, nullsFirst: false })
       .then(({ data }) => {
         if (!data || data.length <= 1) return;
         const siblings = data.map(rowToRun);
-        // Sort: by effective date (collectionDate or date) first, then run_order, then start_time
+        // Sort: by effective date first, then run_order, then backloads after regular runs, then start_time
         siblings.sort((a, b) => {
           const aDate = a.collectionDate || a.date;
           const bDate = b.collectionDate || b.date;
@@ -286,6 +290,10 @@ export default function RunDetailPage() {
           if (a.runOrder != null && b.runOrder != null) return a.runOrder - b.runOrder;
           if (a.runOrder != null) return -1;
           if (b.runOrder != null) return 1;
+          // Backloads (collection phase) should come after regular runs on the same day
+          const aBack = a.runType === "backload" ? 1 : 0;
+          const bBack = b.runType === "backload" ? 1 : 0;
+          if (aBack !== bBack) return aBack - bBack;
           return a.startTime.localeCompare(b.startTime);
         });
         const chains = computeChainedStarts(siblings);
@@ -1845,12 +1853,11 @@ export default function RunDetailPage() {
                   const collBadgeText =
                     collStatus === "collected" ? "COLLECTED" : collStatus === "collecting" ? "COLLECTING" : "AWAITING COLLECTION";
 
-                  // Collection ETA: use booking time if set, otherwise chainedStartTime
-                  const collEta = collStatus === "waiting"
-                    ? (run.collectionTime
-                      ? `Booking ${run.collectionTime}`
-                      : (chainedStartTime ? `ETA ${chainedStartTime}` : null))
-                    : null;
+                  // Collection ETA: show booking time + chained arrival ETA if available
+                  const collBooking = collStatus === "waiting" && run.collectionTime
+                    ? `Booking ${run.collectionTime}` : null;
+                  const collArrivalEta = collStatus === "waiting" && chainedStartTime
+                    ? `ETA ${chainedStartTime}` : null;
 
                   return (
                     <div className="border border-white/10 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap mb-1">
@@ -1862,9 +1869,14 @@ export default function RunDetailPage() {
                           <div className="font-semibold">
                             {withNickname(normalizePostcode(run.fromPostcode), nicknames)}
                             <span className="ml-2 text-sm text-gray-400 font-normal">Collection</span>
-                            {collEta && (
-                              <span className={`ml-2 text-sm font-normal ${run.collectionTime ? "text-amber-300" : "text-blue-300"}`}>
-                                {collEta}
+                            {collBooking && (
+                              <span className="ml-2 text-sm font-normal text-amber-300">
+                                {collBooking}
+                              </span>
+                            )}
+                            {collArrivalEta && (
+                              <span className="ml-2 text-sm font-normal text-blue-300">
+                                {collArrivalEta}
                               </span>
                             )}
                           </div>

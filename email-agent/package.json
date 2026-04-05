@@ -1,0 +1,21 @@
+{
+  "name": "mlc-email-agent",
+  "version": "1.0.0",
+  "description": "AI-powered email triage for Montpellier Appliances & MLC Transport",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+"imap": "^0.8.19",
+    "mailparser": "^3.7.2",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.7",
+    "nodemailer": "^6.10.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

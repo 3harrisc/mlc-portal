@@ -1,0 +1,59 @@
+services:
+  - type: worker
+    name: mlc-email-agent
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: MONTPELLIER_CLIENT_ID
+        sync: false
+      - key: MONTPELLIER_TENANT_ID
+        sync: false
+      - key: MONTPELLIER_CLIENT_SECRET
+        sync: false
+      - key: MONTPELLIER_EMAIL
+        sync: false
+      - key: IMAP_HOST
+        sync: false
+      - key: IMAP_PORT
+        sync: false
+      - key: IMAP_TLS
+        sync: false
+      - key: MLC_EMAIL_1
+        sync: false
+      - key: MLC_PASS_1
+        sync: false
+      - key: MLC_EMAIL_2
+        sync: false
+      - key: MLC_PASS_2
+        sync: false
+      - key: MLC_EMAIL_3
+        sync: false
+      - key: MLC_PASS_3
+        sync: false
+      - key: MLC_EMAIL_4
+        sync: false
+      - key: MLC_PASS_4
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: XERO_FORWARD_EMAIL
+        sync: false
+      - key: PORTAL_FORWARD_EMAIL
+        sync: false

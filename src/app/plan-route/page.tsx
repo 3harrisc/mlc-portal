@@ -410,6 +410,11 @@ export default function PlanRoutePage() {
     setRouteError(parsed.length ? "" : "No valid postcodes found.");
   }
 
+  /** Rebuild rawText from the current stops order (preserves booking times, refs, addresses) */
+  function syncRawText(stopsArr: Stop[]) {
+    setRawText(stopsArr.map((s) => s.input).join("\n"));
+  }
+
   function onDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over) return;
@@ -421,13 +426,18 @@ export default function PlanRoutePage() {
 
     const next = arrayMove(stops, oldIndex, newIndex);
     setStops(next);
+    syncRawText(next);
 
     setScheduleRows([]);
     setLegRows([]);
   }
 
   function removeStop(id: string) {
-    setStops((prev) => prev.filter((s) => s.id !== id));
+    setStops((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      syncRawText(next);
+      return next;
+    });
     setScheduleRows([]);
     setLegRows([]);
   }
@@ -549,6 +559,7 @@ export default function PlanRoutePage() {
     }
 
     setStops(ordered);
+    syncRawText(ordered);
 
     try {
       const routePoints: LngLat[] = [coords[from], ...ordered.map((s) => coords[s.postcode])];

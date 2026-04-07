@@ -8,7 +8,7 @@ const SYSTEM_PROMPT = `You are an email classifier for a UK transport and applia
 Classify each email into exactly ONE category:
 
 - "invoice" — invoices, bills, statements, payment requests, remittance advice
-- "job" — job confirmations, booking confirmations, delivery/collection confirmations, consignment notes
+- "job" — ONLY confirmed/accepted jobs or bookings. Must be a definite confirmation, NOT an offer, availability list, or quote. "Available loads", "load board", "jobs available" are NOT confirmations — classify those as "normal"
 - "vip" — emails from VIP senders (you'll be told which domains/addresses are VIP)
 - "urgent" — complaints, legal threats, DVSA notices, safety recalls, accidents, emergencies
 - "normal" — everything else (newsletters, general enquiries, marketing, etc.)

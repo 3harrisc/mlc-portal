@@ -53,8 +53,7 @@ module.exports = {
 
   // ── Ignored domains (skip entirely) ────────────────────
   ignoredDomains: [
-    // "newsletter.example.com",
-    // "marketing.example.com",
+    "zieglergroup.com",
   ],
 
   // ── Digest schedule (cron expressions) ─────────────────

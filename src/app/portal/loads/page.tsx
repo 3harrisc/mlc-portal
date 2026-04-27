@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { PlannedRun } from "@/types/runs";
 import { useNicknames } from "@/hooks/useNicknames";
+import { usePostcodeCoords } from "@/hooks/usePostcodeCoords";
+import { parseStops } from "@/lib/postcode-utils";
 import { todayISO } from "@/lib/time-utils";
 import { usePortalData } from "@/components/portal/PortalDataContext";
 import { useAuth } from "@/components/AuthProvider";
@@ -162,10 +164,25 @@ export default function LoadsPage() {
 
   // Chained-start map: vehicle+date groups with >1 load get computed chain
   // starts so leg 2's start time / ETA reflects leg 1's finish + travel,
-  // matching the dispatch planner's stacked-runs handling.
+  // matching the dispatch planner's stacked-runs handling. Postcode coords
+  // (resolved via the cached `postcode_coords` table) make the inter-leg
+  // travel time realistic instead of a flat 30-minute fallback.
+  const chainPostcodes = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of enrichedAll) {
+      const r = e.run;
+      if (!r.vehicle?.trim()) continue;
+      if (r.fromPostcode) set.add(r.fromPostcode);
+      const stops = parseStops(r.rawText);
+      if (stops.length) set.add(stops[stops.length - 1]);
+    }
+    return Array.from(set);
+  }, [enrichedAll]);
+  const { coords: chainCoords } = usePostcodeCoords(chainPostcodes);
+
   const chains = useMemo(
-    () => computeLoadChains(enrichedAll.map((e) => e.run)),
-    [enrichedAll],
+    () => computeLoadChains(enrichedAll.map((e) => e.run), chainCoords),
+    [enrichedAll, chainCoords],
   );
 
   const enriched: LoadRow[] = useMemo(

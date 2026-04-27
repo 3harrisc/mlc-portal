@@ -9,7 +9,7 @@ import type { PlannedRun, CustomerKey } from "@/types/runs";
 import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { fetchCustomerNames } from "@/lib/customers";
-import { parseStops } from "@/lib/postcode-utils";
+import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { useNicknames } from "@/hooks/useNicknames";
 import { withNickname } from "@/lib/postcode-nicknames";
 import { computeChainedStarts } from "@/lib/runDuration";
@@ -281,14 +281,18 @@ export default function RunsPage() {
   // Cache postcode coords for inter-run travel estimates
   const [postcodeCoords, setPostcodeCoords] = useState<Record<string, LngLat>>({});
 
-  // Collect all postcodes used in multi-run vehicle groups
+  // Collect all postcodes used in multi-run vehicle groups. We use the
+  // canonical "with-space" form via normalizePostcode because that's what
+  // the postcode_coords cache table stores — earlier code stripped spaces
+  // here, which made every lookup miss and silently fall back to a flat
+  // 30-minute travel-time estimate.
   const chainPostcodes = useMemo(() => {
     const pcs = new Set<string>();
     for (const r of runs) {
       if (!r.vehicle?.trim()) continue;
-      pcs.add(r.fromPostcode.toUpperCase().replace(/\s/g, ""));
+      if (r.fromPostcode) pcs.add(normalizePostcode(r.fromPostcode));
       const stops = parseStops(r.rawText);
-      if (stops.length) pcs.add(stops[stops.length - 1].toUpperCase().replace(/\s/g, ""));
+      if (stops.length) pcs.add(normalizePostcode(stops[stops.length - 1]));
     }
     return Array.from(pcs);
   }, [runs]);
@@ -305,7 +309,9 @@ export default function RunsPage() {
         if (!data) return;
         const map: Record<string, LngLat> = {};
         for (const row of data) {
-          map[row.postcode] = { lat: row.lat, lng: row.lng };
+          // Re-normalise on the way in so the lookup key always matches
+          // estimateTravelMins' lookup, regardless of casing variations.
+          map[normalizePostcode(row.postcode)] = { lat: row.lat, lng: row.lng };
         }
         setPostcodeCoords(map);
       });

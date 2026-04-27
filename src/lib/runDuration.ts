@@ -1,4 +1,4 @@
-import { parseStops } from "@/lib/postcode-utils";
+import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import type { PlannedRun } from "@/types/runs";
 import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
 import { MAX_DRIVE_BEFORE_BREAK_MINS, BREAK_MINS } from "@/lib/constants";
@@ -68,16 +68,33 @@ export function estimateFinishTime(run: PlannedRun): {
   return { finishTime: minutesToTime(finishMins), finishMins, lastPostcode };
 }
 
-/** Estimate travel time (mins) between two postcodes using cached coordinates */
+/**
+ * Estimate travel time (mins) between two postcodes using cached coordinates.
+ *
+ * The `coords` map is expected to be keyed by `normalizePostcode(pc)` (the
+ * canonical "with-space" form, e.g. "BS20 7XN"). Both inputs are normalised
+ * before lookup so callers don't have to think about it.
+ *
+ * Tolerates the legacy no-space key format too — earlier code in this repo
+ * built coords maps keyed by `pc.toUpperCase().replace(/\s/g, "")` (i.e.
+ * "BS207XN"), and we don't want a silent fallback to 30 mins if a caller
+ * still does that. Both shapes resolve correctly.
+ */
 function estimateTravelMins(
   fromPc: string,
   toPc: string,
   coords: Record<string, LngLat>
 ): number {
+  if (!fromPc || !toPc) return AVG_INTER_RUN_TRAVEL;
   if (fromPc === toPc) return 0;
 
-  const from = coords[fromPc.toUpperCase().replace(/\s/g, "")];
-  const to = coords[toPc.toUpperCase().replace(/\s/g, "")];
+  const lookup = (pc: string): LngLat | undefined => {
+    const norm = normalizePostcode(pc);
+    return coords[norm] ?? coords[norm.replace(/\s/g, "")];
+  };
+
+  const from = lookup(fromPc);
+  const to = lookup(toPc);
 
   if (!from || !to) return AVG_INTER_RUN_TRAVEL; // fallback if coords missing
 

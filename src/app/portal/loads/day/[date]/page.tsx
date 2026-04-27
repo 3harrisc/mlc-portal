@@ -20,6 +20,8 @@ import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import { useAuth } from "@/components/AuthProvider";
 import { useNicknames } from "@/hooks/useNicknames";
+import { usePostcodeCoords } from "@/hooks/usePostcodeCoords";
+import { parseStops } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
 import { listLoadsForDate } from "@/app/actions/loads";
 import {
@@ -136,7 +138,23 @@ export default function CustomerLoadsDayPage() {
     };
   }, [loads]);
 
-  const chains = useMemo(() => computeLoadChains(loads), [loads]);
+  // Fetch postcode coords for chained-start travel-time calculations.
+  // Without these the chain math falls back to a flat 30-minute travel
+  // estimate between legs; with them it uses haversine distance × road
+  // factor / HGV speed for a realistic gap.
+  const chainPostcodes = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of loads) {
+      if (!r.vehicle?.trim()) continue;
+      if (r.fromPostcode) set.add(r.fromPostcode);
+      const stops = parseStops(r.rawText);
+      if (stops.length) set.add(stops[stops.length - 1]);
+    }
+    return Array.from(set);
+  }, [loads]);
+  const { coords } = usePostcodeCoords(chainPostcodes);
+
+  const chains = useMemo(() => computeLoadChains(loads, coords), [loads, coords]);
 
   const today = todayISO();
   const isToday = date === today;

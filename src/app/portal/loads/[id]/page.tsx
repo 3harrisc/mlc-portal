@@ -175,17 +175,30 @@ function LoadDetailView({
   }, [run.completedStopIndexes, run.progress]);
   const completedCount = completedIdx.size;
   const total = stops.length;
+  // Combined postcode list: this load's stops (for the map pins) + every
+  // sibling's from / last-stop postcodes (so chained-start travel time uses
+  // real haversine distance instead of the 30-minute fallback).
+  const allChainPostcodes = useMemo(() => {
+    const set = new Set<string>(stops);
+    const chainable = siblings.length > 0 ? siblings : [run];
+    for (const r of chainable) {
+      if (r.fromPostcode) set.add(r.fromPostcode);
+      const sibStops = parseStops(r.rawText);
+      if (sibStops.length) set.add(sibStops[sibStops.length - 1]);
+    }
+    return Array.from(set);
+  }, [stops, siblings, run]);
+  const { coords } = usePostcodeCoords(allChainPostcodes);
+
   // When this load shares a vehicle+date with one or more siblings, surface
   // the chained start time / ETA — matches dispatch's stacked-run handling.
   const chains = useMemo(
-    () => computeLoadChains(siblings.length > 0 ? siblings : [run]),
-    [siblings, run],
+    () => computeLoadChains(siblings.length > 0 ? siblings : [run], coords),
+    [siblings, run, coords],
   );
   const chainedInfo = chains.get(run.id);
   const displayedStart = chainedInfo?.chainedStartTime ?? run.startTime;
   const eta = chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run);
-
-  const { coords } = usePostcodeCoords(stops);
 
   const { mapPins, mapRoutes } = useMemo(
     () => buildMapData(stops, coords, completedIdx, truckPos, status === "delivered"),

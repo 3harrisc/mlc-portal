@@ -693,8 +693,12 @@ export async function POST(req: Request) {
         collectionTime: bookingTime,
       };
 
+      // Forwarded customer emails (Ashwood schedules, Consolid8 bookings,
+      // etc.) are pre-bookings — they belong on the customer-facing /portal/
+      // loads surface, not on the dispatch planner. Dispatch creates a
+      // matching planner row themselves once they schedule it.
       const { error: insertErr } = await sb
-        .from("runs")
+        .from("loads")
         .insert([runToRow(run)]);
 
       if (insertErr) {

@@ -127,3 +127,82 @@ export async function deleteLoads(ids: ReadonlyArray<string>): Promise<{
   if (error) return { error: error.message };
   return { deleted: ids.length };
 }
+
+/**
+ * Promote a customer load into the dispatch planner.
+ *
+ * Reads the loads row, copies it across to the runs table with a fresh ID
+ * (so the load and the planner row are separate records — same physical
+ * journey, two perspectives) and a freshly minted job number for the
+ * planner side. The original loads row is left in place so the customer
+ * keeps their tracking view; the operator can delete it manually if they
+ * no longer need it on the customer surface.
+ *
+ * Admin-only — only dispatch should be promoting loads to the planner.
+ */
+export async function copyLoadToPlanner(
+  loadId: string,
+): Promise<{ runId?: string; jobNumber?: string; error?: string }> {
+  const { supabase, user } = await getUser();
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "admin") return { error: "Admin role required" };
+
+  // 1. Fetch the source load.
+  const { data: load, error: fetchErr } = await supabase
+    .from("loads")
+    .select("*")
+    .eq("id", loadId)
+    .maybeSingle();
+  if (fetchErr) return { error: fetchErr.message };
+  if (!load) return { error: "Load not found" };
+
+  // 2. Mint a new ID + job number for the planner side. The job number RPC
+  //    keys on the run date so the format matches the rest of the planner.
+  const newRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const dateKey = String(load.date ?? "").replaceAll("-", "");
+  let jobNumber = "";
+  if (dateKey) {
+    const { data: counter, error: rpcErr } = await supabase.rpc(
+      "increment_job_counter",
+      { p_date_key: dateKey },
+    );
+    if (!rpcErr && typeof counter === "number") {
+      jobNumber = `MLC-${dateKey}-${String(counter).padStart(3, "0")}`;
+    }
+  }
+
+  // 3. Build the runs row from the load row. We deliberately copy the full
+  //    payload (postcodes, raw_text, vehicle, times, etc.) so the planner
+  //    has everything it needs out of the gate. Progress / completion meta
+  //    are reset — the planner side starts from scratch even if the
+  //    customer-tracking view already showed some progress.
+  const planner = {
+    ...load,
+    id: newRunId,
+    job_number: jobNumber,
+    completed_stop_indexes: [],
+    completed_meta: {},
+    progress: {
+      completedIdx: [],
+      onSiteIdx: null,
+      onSiteSinceMs: null,
+      lastInside: false,
+    },
+    share_token: null,
+    share_token_created_at: null,
+    created_by: user.id,
+    created_at: new Date().toISOString(),
+  };
+  // Drop columns Postgres will set on insert.
+  delete (planner as Record<string, unknown>).updated_at;
+
+  const { error: insertErr } = await supabase.from("runs").insert(planner);
+  if (insertErr) return { error: insertErr.message };
+
+  return { runId: newRunId, jobNumber };
+}

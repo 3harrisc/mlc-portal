@@ -93,22 +93,37 @@ export async function GET(req: Request) {
     const today = now.toISOString().slice(0, 10);
     const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
 
-    // Also fetch cross-day backloads where collection_date is today/yesterday
-    const { data: runs, error: runsErr } = await sb
-      .from("runs")
-      .select("*")
-      .or(`date.in.(${today},${yesterday}),collection_date.in.(${today},${yesterday})`)
-      .neq("vehicle", "");
+    // Fetch tracking-eligible rows from BOTH tables (dispatch `runs` and
+    // customer-facing `loads`). Each row is tagged with `_source` so the
+    // update path knows which table to write back to. Cross-day backloads
+    // where collection_date is today/yesterday are included.
+    const dateFilter = `date.in.(${today},${yesterday}),collection_date.in.(${today},${yesterday})`;
+    const [runsRes, loadsRes] = await Promise.all([
+      sb.from("runs").select("*").or(dateFilter).neq("vehicle", ""),
+      sb.from("loads").select("*").or(dateFilter).neq("vehicle", ""),
+    ]);
 
-    if (runsErr) {
-      console.error("[update-progress] runs query error:", runsErr);
+    if (runsRes.error) {
+      console.error("[update-progress] runs query error:", runsRes.error);
       return NextResponse.json(
-        { ok: false, error: runsErr.message },
+        { ok: false, error: runsRes.error.message },
+        { status: 500 }
+      );
+    }
+    if (loadsRes.error) {
+      console.error("[update-progress] loads query error:", loadsRes.error);
+      return NextResponse.json(
+        { ok: false, error: loadsRes.error.message },
         { status: 500 }
       );
     }
 
-    if (!runs?.length) {
+    const runs = [
+      ...(runsRes.data ?? []).map((r) => ({ ...r, _source: "runs" as const })),
+      ...(loadsRes.data ?? []).map((r) => ({ ...r, _source: "loads" as const })),
+    ];
+
+    if (!runs.length) {
       return NextResponse.json({
         ok: true,
         message: "No active runs",
@@ -181,10 +196,13 @@ export async function GET(req: Request) {
     // Runs that are NOT first on their vehicle+date chain — need departure gate
     const chainedNonFirstIds = new Set<string>();
     {
-      // Group runs by vehicle + date
+      // Group by vehicle + date + source. Chaining across the runs/loads
+      // split is intentionally avoided — a planner run and a customer load
+      // are independent records even if they describe the same physical
+      // journey (cross-table linking via load_ref is a future feature).
       const groups = new Map<string, typeof activeRuns>();
       for (const run of activeRuns) {
-        const key = `${normVehicle(run.vehicle)}|${run.date}`;
+        const key = `${run._source}|${normVehicle(run.vehicle)}|${run.date}`;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(run);
       }
@@ -308,7 +326,7 @@ export async function GET(req: Request) {
             p.onSiteIdx = null;
             p.onSiteSinceMs = null;
 
-            await sb.from("runs").update({
+            await sb.from(run._source).update({
               progress: p,
               completed_meta: mergedMeta,
             }).eq("id", run.id);
@@ -335,7 +353,7 @@ export async function GET(req: Request) {
           }
         }
         if (allDonePatched) {
-          await sb.from("runs").update({ completed_meta: allDoneMeta }).eq("id", run.id);
+          await sb.from(run._source).update({ completed_meta: allDoneMeta }).eq("id", run.id);
           updated++;
           results.push({ runId: run.id, vehicle: run.vehicle, status: "patched_departure_times" });
         } else {
@@ -382,7 +400,7 @@ export async function GET(req: Request) {
 
             // Still persist the pendingDeparture flag
             const { error: pdErr } = await sb
-              .from("runs")
+              .from(run._source)
               .update({ progress: p })
               .eq("id", run.id);
             if (!pdErr) updated++;
@@ -552,8 +570,10 @@ export async function GET(req: Request) {
       }
 
       // ── Write to Supabase ──
+      // Each run was tagged with _source ("runs" | "loads") at fetch time so
+      // the update lands back on the correct table.
       const { error: updateErr } = await sb
-        .from("runs")
+        .from(run._source)
         .update(updateRow)
         .eq("id", run.id);
 

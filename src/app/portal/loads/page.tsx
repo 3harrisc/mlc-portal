@@ -7,7 +7,7 @@ import { useNicknames } from "@/hooks/useNicknames";
 import { usePortalData } from "@/components/portal/PortalDataContext";
 import { useAuth } from "@/components/AuthProvider";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteLoads, setLoadVehicle } from "@/app/actions/loads";
+import { copyLoadToPlanner, deleteLoads, setLoadVehicle } from "@/app/actions/loads";
 import { listVehicles } from "@/app/actions/fleet";
 import Icon from "@/components/portal/Icon";
 import StatusPill, {
@@ -15,6 +15,7 @@ import StatusPill, {
   type LoadStatus,
 } from "@/components/portal/StatusPill";
 import { usePortalSearch } from "@/components/portal/PortalSearchContext";
+import { useToast } from "@/components/portal/ToastContext";
 import {
   matchesSearch,
   progressTuple,
@@ -52,6 +53,7 @@ export default function LoadsPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   const nicknames = useNicknames();
+  const { showToast } = useToast();
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState<"all" | string>("all");
@@ -116,6 +118,39 @@ export default function LoadsPage() {
     // Re-fetch instead of full page reload — keeps scroll position, sidebar
     // state, etc. intact while the deleted rows disappear from the table.
     refetch();
+  }
+
+  // Tracks which load rows are mid-promotion so we can show a spinner /
+  // disable the button while the server action is in flight.
+  const [copying, setCopying] = useState<Set<string>>(new Set());
+
+  /**
+   * Promote a customer load into the dispatch planner. The load itself is
+   * preserved on /portal/loads (the customer keeps their tracking view); a
+   * matching `runs` row is created so dispatch can manage it from the
+   * planner. They're independent records — same physical journey, two
+   * perspectives — until cross-table linking via load_ref ships.
+   */
+  async function handleCopyToPlanner(loadId: string) {
+    if (copying.has(loadId)) return;
+    setCopying((curr) => {
+      const next = new Set(curr);
+      next.add(loadId);
+      return next;
+    });
+    const res = await copyLoadToPlanner(loadId);
+    setCopying((curr) => {
+      const next = new Set(curr);
+      next.delete(loadId);
+      return next;
+    });
+    if (res.error) {
+      showToast(`Couldn't copy to planner: ${res.error}`, "err");
+      return;
+    }
+    showToast(
+      `Copied to planner${res.jobNumber ? ` as ${res.jobNumber}` : ""}.`,
+    );
   }
 
   const enriched: LoadRow[] = useMemo(
@@ -423,6 +458,7 @@ export default function LoadsPage() {
                   onSort={setSort}
                 />
                 <th />
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -436,12 +472,14 @@ export default function LoadsPage() {
                   fleetVehicles={fleetVehicles}
                   vehicleOverride={vehicleOverrides[row.run.id]}
                   onSetVehicle={handleSetVehicle}
+                  onCopyToPlanner={handleCopyToPlanner}
+                  copying={copying.has(row.run.id)}
                 />
               ))}
               {!loading && visible.length === 0 && (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     style={{
                       textAlign: "center",
                       padding: 40,
@@ -455,7 +493,7 @@ export default function LoadsPage() {
               {loading && (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={11}
                     style={{
                       textAlign: "center",
                       padding: 40,
@@ -564,6 +602,8 @@ function LoadTableRow({
   fleetVehicles,
   vehicleOverride,
   onSetVehicle,
+  onCopyToPlanner,
+  copying,
 }: {
   row: LoadRow;
   selected: boolean;
@@ -572,6 +612,8 @@ function LoadTableRow({
   fleetVehicles: ReadonlyArray<string>;
   vehicleOverride?: string;
   onSetVehicle: (runId: string, vehicle: string) => Promise<void>;
+  onCopyToPlanner: (id: string) => Promise<void>;
+  copying: boolean;
 }) {
   const { run, status, fromName, toName, eta, progress } = row;
   // Use local override if present (shows immediately after admin edit), else canonical.
@@ -715,6 +757,25 @@ function LoadTableRow({
       <RowLink id={run.id}>
         <StatusPill status={status} />
       </RowLink>
+      {isAdmin ? (
+        // Admin-only "Copy to planner": promotes this customer load into the
+        // dispatch `runs` table without removing it from /portal/loads, so
+        // dispatch and the customer can both see what they need.
+        <td onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="btn sm ghost"
+            disabled={copying}
+            onClick={() => void onCopyToPlanner(run.id)}
+            title="Copy this load to the dispatch planner"
+            style={{ whiteSpace: "nowrap", fontSize: 11 }}
+          >
+            <Icon name="arrowR" size={11} /> {copying ? "Copying…" : "To planner"}
+          </button>
+        </td>
+      ) : (
+        <td />
+      )}
       <RowLink id={run.id}>
         <Icon name="chevR" size={14} className="muted" />
       </RowLink>

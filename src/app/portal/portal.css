@@ -440,6 +440,25 @@
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
+
+/* Drag-handle on resizable column headers — see ResizableHeader.tsx.
+   The default 10px hit-box is invisible; on hover/active a 2px brand-blue
+   strip lights up so the user sees it's draggable. */
+.portal-shell .col-resize-handle::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 25%;
+  bottom: 25%;
+  width: 2px;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 100ms;
+}
+.portal-shell .col-resize-handle:hover::before,
+.portal-shell .col-resize-handle:active::before {
+  background: var(--mlc-blue);
+}
 .portal-shell .table-toolbar {
   display: flex; align-items: center; gap: 8px;
   padding: 10px;

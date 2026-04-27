@@ -8,6 +8,32 @@ import {
   deletePlannerRun,
 } from "@/app/actions/planner";
 import Icon from "@/components/portal/Icon";
+import { useResizableColumns, type ColumnDef } from "@/hooks/useResizableColumns";
+import ResizableHeader from "@/components/planner/ResizableHeader";
+
+/**
+ * Column definitions for the planner grid. Drag-resizable; widths persist
+ * in localStorage per-device (so the iPad and the dispatch monitor each
+ * remember their own layout).
+ */
+const PLANNER_COLUMNS: ReadonlyArray<ColumnDef> = [
+  { id: "collection",      defaultWidth: 140, minWidth: 70 },
+  { id: "delivery",        defaultWidth: 170, minWidth: 70 },
+  { id: "days",            defaultWidth: 92,  minWidth: 70 },
+  { id: "factory",         defaultWidth: 88,  minWidth: 50 },
+  { id: "booking",         defaultWidth: 80,  minWidth: 50 },
+  { id: "vehicle",         defaultWidth: 86,  minWidth: 60 },
+  { id: "subby_driver",    defaultWidth: 90,  minWidth: 50 },
+  { id: "subby_cost",      defaultWidth: 76,  minWidth: 50 },
+  { id: "trailer_number",  defaultWidth: 76,  minWidth: 50 },
+  { id: "trailer_dropped", defaultWidth: 56,  minWidth: 40 },
+  { id: "reference",       defaultWidth: 110, minWidth: 60 },
+  { id: "customer",        defaultWidth: 130, minWidth: 70 },
+  { id: "revenue",         defaultWidth: 88,  minWidth: 60 },
+  { id: "bill",            defaultWidth: 50,  minWidth: 40 },
+  { id: "status",          defaultWidth: 90,  minWidth: 60 },
+  { id: "delete",          defaultWidth: 70,  minWidth: 50 },
+];
 
 /**
  * The "DAILY TRANSPORT SHEET" — the source of truth for the day's runs.
@@ -49,6 +75,12 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
   const [runs, setRuns] = useState<PlannedRun[]>([...initialRuns]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Drag-resizable column widths, persisted per-device in localStorage.
+  const { widths, setWidth, reset: resetColumnWidths } = useResizableColumns(
+    "planner-grid",
+    PLANNER_COLUMNS
+  );
 
   const initialKey = useMemo(() => initialRuns.map((r) => r.id).join("|"), [initialRuns]);
   const lastKey = React.useRef(initialKey);
@@ -167,54 +199,59 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
           <table
             className="data"
             style={{
-              width: "100%",
               tableLayout: "fixed",
               fontSize: 12,
+              // Width = sum of visible column widths; horizontal scroll appears
+              // when this exceeds the container, which is fine on iPad.
+              width: visibleColumnsWidthSum(widths, showSubbyCost, editable),
             }}
           >
             {/*
-              Explicit column widths so the row fits on one screen without
-              horizontal scroll. Booking Time / FACTORY / SUBBY COST /
-              Trailer Number / Vehicle were trimmed per operator feedback —
-              they're rarely fully populated, so they don't earn 150px each.
+              Drag-resizable widths persisted in localStorage per-device.
+              Tint stripe is always 4px (not user-resizable); everything
+              else is on the user's hook. See useResizableColumns.ts.
             */}
             <colgroup>
-              <col style={{ width: 4 }} />          {/* tint stripe */}
-              <col style={{ width: "11%" }} />      {/* Collection */}
-              <col style={{ width: "13%" }} />      {/* Delivery — leave longest */}
-              <col style={{ width: 92 }} />         {/* DAYS — bigger so the 1 OF 2 inputs are visible */}
-              <col style={{ width: 78 }} />         {/* FACTORY (BRAKES, POOLE…) */}
-              <col style={{ width: 70 }} />         {/* Booking Time */}
-              <col style={{ width: 76 }} />         {/* Vehicle */}
-              <col style={{ width: 86 }} />         {/* SUBBY/DRIVER — trimmed */}
-              {showSubbyCost && <col style={{ width: 70 }} />}  {/* SUBBY COST (conditional) */}
-              <col style={{ width: 64 }} />         {/* Trailer Number — trimmed */}
-              <col style={{ width: 50 }} />         {/* Trailer Dropped? */}
-              <col style={{ width: "10%" }} />      {/* Reference */}
-              <col style={{ width: "11%" }} />      {/* Customer */}
-              <col style={{ width: 80 }} />         {/* Revenue */}
-              <col style={{ width: 44 }} />         {/* Bill? */}
-              <col style={{ width: 80 }} />         {/* Status */}
-              {editable && <col style={{ width: 64 }} />}{/* Delete */}
+              <col style={{ width: 4 }} />{/* tint stripe — fixed */}
+              <col style={{ width: widths.collection }} />
+              <col style={{ width: widths.delivery }} />
+              <col style={{ width: widths.days }} />
+              <col style={{ width: widths.factory }} />
+              <col style={{ width: widths.booking }} />
+              <col style={{ width: widths.vehicle }} />
+              <col style={{ width: widths.subby_driver }} />
+              {showSubbyCost && <col style={{ width: widths.subby_cost }} />}
+              <col style={{ width: widths.trailer_number }} />
+              <col style={{ width: widths.trailer_dropped }} />
+              <col style={{ width: widths.reference }} />
+              <col style={{ width: widths.customer }} />
+              <col style={{ width: widths.revenue }} />
+              <col style={{ width: widths.bill }} />
+              <col style={{ width: widths.status }} />
+              {editable && <col style={{ width: widths.delete }} />}
             </colgroup>
             <thead>
               <tr>
-                <th />{/* row tint indicator */}
-                <th>Collection</th>
-                <th>Delivery</th>
-                <th style={{ textAlign: "center" }}>DAYS</th>
-                <th>FACTORY</th>
-                <th>Booking</th>
-                <th>Vehicle</th>
-                <th>SUBBY/DRIVER</th>
-                {showSubbyCost && <th className="right">SUBBY £</th>}
-                <th>Trailer #</th>
-                <th style={{ textAlign: "center" }} title="Trailer dropped?">Drop?</th>
-                <th>Reference</th>
-                <th>Customer</th>
-                <th className="right">Revenue</th>
-                <th style={{ textAlign: "center" }}>Bill?</th>
-                <th>Status</th>
+                <th />{/* row tint indicator — not resizable */}
+                <ResizableHeader colId="collection" width={widths.collection} minWidth={70} onResize={setWidth}>Collection</ResizableHeader>
+                <ResizableHeader colId="delivery"   width={widths.delivery}   minWidth={70} onResize={setWidth}>Delivery</ResizableHeader>
+                <ResizableHeader colId="days"       width={widths.days}       minWidth={70} onResize={setWidth} align="center">DAYS</ResizableHeader>
+                <ResizableHeader colId="factory"    width={widths.factory}    minWidth={50} onResize={setWidth}>FACTORY</ResizableHeader>
+                <ResizableHeader colId="booking"    width={widths.booking}    minWidth={50} onResize={setWidth}>Booking</ResizableHeader>
+                <ResizableHeader colId="vehicle"    width={widths.vehicle}    minWidth={60} onResize={setWidth}>Vehicle</ResizableHeader>
+                <ResizableHeader colId="subby_driver" width={widths.subby_driver} minWidth={50} onResize={setWidth}>SUBBY/DRIVER</ResizableHeader>
+                {showSubbyCost && (
+                  <ResizableHeader colId="subby_cost" width={widths.subby_cost} minWidth={50} onResize={setWidth} align="right">SUBBY £</ResizableHeader>
+                )}
+                <ResizableHeader colId="trailer_number" width={widths.trailer_number} minWidth={50} onResize={setWidth}>Trailer #</ResizableHeader>
+                <ResizableHeader colId="trailer_dropped" width={widths.trailer_dropped} minWidth={40} onResize={setWidth} align="center" className="" >
+                  <span title="Trailer dropped?">Drop?</span>
+                </ResizableHeader>
+                <ResizableHeader colId="reference"  width={widths.reference}  minWidth={60} onResize={setWidth}>Reference</ResizableHeader>
+                <ResizableHeader colId="customer"   width={widths.customer}   minWidth={70} onResize={setWidth}>Customer</ResizableHeader>
+                <ResizableHeader colId="revenue"    width={widths.revenue}    minWidth={60} onResize={setWidth} align="right">Revenue</ResizableHeader>
+                <ResizableHeader colId="bill"       width={widths.bill}       minWidth={40} onResize={setWidth} align="center">Bill?</ResizableHeader>
+                <ResizableHeader colId="status"     width={widths.status}     minWidth={60} onResize={setWidth}>Status</ResizableHeader>
                 {editable && <th />}
               </tr>
             </thead>
@@ -331,6 +368,14 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
             <button type="button" className="btn sm" disabled={busy} onClick={() => void addRow()}>
               <Icon name="plus" size={11} /> Add row
             </button>
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={resetColumnWidths}
+              title="Restore default column widths on this device"
+            >
+              <Icon name="refresh" size={11} /> Reset columns
+            </button>
             <Legend />
           </div>
         )}
@@ -374,6 +419,41 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
 });
 
 export default PlannerGrid;
+
+/**
+ * Sum the widths of every currently-visible column. Used as the table's
+ * total width so the browser knows when to overflow into a horizontal
+ * scrollbar (rather than crushing the content).
+ */
+function visibleColumnsWidthSum(
+  widths: Readonly<Record<string, number>>,
+  showSubbyCost: boolean,
+  editable: boolean
+): number {
+  const TINT_STRIPE = 4;
+  let total = TINT_STRIPE;
+  for (const id of [
+    "collection",
+    "delivery",
+    "days",
+    "factory",
+    "booking",
+    "vehicle",
+    "subby_driver",
+    "trailer_number",
+    "trailer_dropped",
+    "reference",
+    "customer",
+    "revenue",
+    "bill",
+    "status",
+  ]) {
+    total += widths[id] ?? 0;
+  }
+  if (showSubbyCost) total += widths.subby_cost ?? 0;
+  if (editable) total += widths.delete ?? 0;
+  return total;
+}
 
 // ── Cell components ──────────────────────────────────────────────────
 

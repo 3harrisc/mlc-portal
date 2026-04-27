@@ -75,6 +75,22 @@ export async function updateRun(
 }
 
 /**
+ * Inline-edit helper: set the vehicle on a single run. Used by the loads
+ * list (so customers can track the moment a registration is assigned) and
+ * potentially other surfaces. Returns the new value so callers can confirm.
+ */
+export async function setRunVehicle(id: string, vehicle: string) {
+  const { supabase } = await getUser();
+  const trimmed = vehicle.trim().toUpperCase();
+  const { error } = await supabase
+    .from("runs")
+    .update({ vehicle: trimmed })
+    .eq("id", id);
+  if (error) return { error: error.message };
+  return { success: true, vehicle: trimmed };
+}
+
+/**
  * Clear `run_order` (set to NULL) on every run on a given date. Used by
  * the planner's "Reset row order" button to revert to the default sort.
  */

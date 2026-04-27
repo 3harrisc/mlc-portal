@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PlannedRun } from "@/types/runs";
 import { useNicknames } from "@/hooks/useNicknames";
 import { usePortalData } from "@/components/portal/PortalDataContext";
 import { useAuth } from "@/components/AuthProvider";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteRuns } from "@/app/actions/runs";
+import { deleteRuns, setRunVehicle } from "@/app/actions/runs";
+import { listVehicles } from "@/app/actions/fleet";
 import Icon from "@/components/portal/Icon";
 import StatusPill, {
   STATUS_LABEL,
@@ -60,6 +61,39 @@ export default function LoadsPage() {
   const [page, setPage] = useState(1);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+
+  // Canonical fleet list — populates the vehicle datalist on each row so
+  // the operator can pick a registration without typing the full code.
+  const [fleetVehicles, setFleetVehicles] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    listVehicles().then((res) => {
+      if (cancelled) return;
+      setFleetVehicles((res.vehicles ?? []).filter((v) => v.active).map((v) => v.id));
+    });
+    return () => { cancelled = true; };
+  }, [isAdmin]);
+
+  // Local optimistic vehicle overrides — show the new value immediately
+  // while the server refresh catches up. PortalData's reload eventually
+  // wipes this when the canonical version comes back.
+  const [vehicleOverrides, setVehicleOverrides] = useState<Record<string, string>>({});
+
+  async function handleSetVehicle(runId: string, raw: string) {
+    const trimmed = raw.trim().toUpperCase();
+    setVehicleOverrides((curr) => ({ ...curr, [runId]: trimmed }));
+    const res = await setRunVehicle(runId, trimmed);
+    if (res.error) {
+      // Roll back the optimistic override on failure.
+      setVehicleOverrides((curr) => {
+        const next = { ...curr };
+        delete next[runId];
+        return next;
+      });
+      alert(`Failed to set vehicle: ${res.error}`);
+    }
+  }
 
   async function handleBulkDelete() {
     if (selected.size === 0) return;
@@ -393,6 +427,10 @@ export default function LoadsPage() {
                   row={row}
                   selected={selected.has(row.run.id)}
                   onToggle={toggleSel}
+                  isAdmin={isAdmin}
+                  fleetVehicles={fleetVehicles}
+                  vehicleOverride={vehicleOverrides[row.run.id]}
+                  onSetVehicle={handleSetVehicle}
                 />
               ))}
               {!loading && visible.length === 0 && (
@@ -517,12 +555,22 @@ function LoadTableRow({
   row,
   selected,
   onToggle,
+  isAdmin,
+  fleetVehicles,
+  vehicleOverride,
+  onSetVehicle,
 }: {
   row: LoadRow;
   selected: boolean;
   onToggle: (id: string) => void;
+  isAdmin: boolean;
+  fleetVehicles: ReadonlyArray<string>;
+  vehicleOverride?: string;
+  onSetVehicle: (runId: string, vehicle: string) => Promise<void>;
 }) {
   const { run, status, fromName, toName, eta, progress } = row;
+  // Use local override if present (shows immediately after admin edit), else canonical.
+  const currentVehicle = vehicleOverride ?? run.vehicle ?? "";
   const stopsExtra = progress.total - 2;
   const progressColor =
     status === "exception"
@@ -586,14 +634,52 @@ function LoadTableRow({
           {run.startTime}
         </div>
       </RowLink>
-      <RowLink id={run.id}>
-        <div className="mono bold" style={{ fontSize: 11.5 }}>
-          {run.vehicle || "—"}
-        </div>
-        <div className="muted" style={{ fontSize: 10.5 }}>
-          —
-        </div>
-      </RowLink>
+      {isAdmin ? (
+        // Admin: inline-edit so the operator can assign a registration here
+        // (which immediately enables customer-side tracking).
+        <td onClick={(e) => e.stopPropagation()}>
+          <input
+            type="text"
+            list={`fleet-${run.id}`}
+            defaultValue={currentVehicle}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v.toUpperCase() !== currentVehicle.toUpperCase()) {
+                void onSetVehicle(run.id, v);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                (e.target as HTMLInputElement).value = currentVehicle;
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            placeholder="Pick reg…"
+            className="input mono"
+            style={{
+              height: 26,
+              padding: "0 8px",
+              fontSize: 11.5,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              width: "100%",
+            }}
+          />
+          <datalist id={`fleet-${run.id}`}>
+            {fleetVehicles.map((v) => <option key={v} value={v} />)}
+          </datalist>
+        </td>
+      ) : (
+        <RowLink id={run.id}>
+          <div className="mono bold" style={{ fontSize: 11.5 }}>
+            {currentVehicle || "—"}
+          </div>
+          <div className="muted" style={{ fontSize: 10.5 }}>
+            {currentVehicle ? "Tractor unit" : "Awaiting reg"}
+          </div>
+        </RowLink>
+      )}
       <RowLink id={run.id} style={{ minWidth: 110 }}>
         <div className="mono tnum" style={{ fontSize: 11 }}>
           {progress.completed}/{progress.total} stops

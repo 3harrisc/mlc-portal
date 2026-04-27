@@ -4,6 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 import { rowToRun, runToRow } from "@/types/runs";
 import type { PlannedRun } from "@/types/runs";
 import { isoWeekMonday } from "@/lib/iso-week";
+import {
+  FIXED_WEEKDAY_RUNS,
+  fixedRunId,
+  isWeekday,
+} from "@/lib/planner/fixed-runs";
 
 async function getUser() {
   const supabase = await createClient();
@@ -311,6 +316,104 @@ export async function insertBlankPlannerRun(date: string, customer = ""): Promis
     .single();
   if (error) return { error: error.message };
   return { run: rowToRun(data) };
+}
+
+/**
+ * Pre-populate the standing weekday runs (Consolid8 daily fixtures) on the
+ * dispatch planner for a given date.
+ *
+ * Behaviour:
+ *   - On Sat/Sun, returns immediately (no fixed runs at the weekend).
+ *   - For each entry in FIXED_WEEKDAY_RUNS that has no corresponding row
+ *     for the date, inserts one. The id is deterministic
+ *     (`fixed-{slug}-{date}`) so this is idempotent — re-running it won't
+ *     create duplicates, and a row the dispatcher has already edited stays
+ *     intact (subsequent runs leave it alone).
+ *   - Returns the count of newly-inserted rows.
+ *
+ * Called from two places:
+ *   1. The /portal/planner/[date] page on load, so opening a fresh weekday
+ *      always shows the fixtures even if the cron hasn't fired yet.
+ *   2. A daily cron at /api/cron/materialize-fixed-runs that pre-creates
+ *      tomorrow's fixtures so they're ready first thing.
+ */
+export async function materializeFixedRuns(
+  date: string,
+): Promise<{ inserted?: number; error?: string }> {
+  if (!isWeekday(date)) return { inserted: 0 };
+  const { supabase, user } = await getUser();
+
+  // Look up which slugs already have a row for this date so we only insert
+  // the missing ones. Cheap because of the indexed PK lookup with .in().
+  const candidateIds = FIXED_WEEKDAY_RUNS.map((spec) =>
+    fixedRunId(spec.slug, date),
+  );
+  const { data: existing, error: fetchErr } = await supabase
+    .from("runs")
+    .select("id")
+    .in("id", candidateIds);
+  if (fetchErr) return { error: fetchErr.message };
+  const existingIds = new Set((existing ?? []).map((r) => r.id as string));
+
+  const toInsert = FIXED_WEEKDAY_RUNS.filter(
+    (spec) => !existingIds.has(fixedRunId(spec.slug, date)),
+  ).map((spec) => {
+    const id = fixedRunId(spec.slug, date);
+    return {
+      id,
+      job_number: "",
+      load_ref: spec.loadRef,
+      date,
+      customer: spec.customer,
+      vehicle: "",
+      from_postcode: spec.fromPostcode,
+      to_postcode: spec.toPostcode,
+      return_to_base: spec.returnToBase,
+      start_time: spec.startTime,
+      service_mins: spec.serviceMins,
+      include_breaks: spec.includeBreaks,
+      raw_text: spec.toPostcode,
+      completed_stop_indexes: [],
+      completed_meta: {},
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+      },
+      created_by: user.id,
+      run_type: spec.runType,
+      run_order: null,
+      collection_time: null,
+      collection_date: null,
+      factory: spec.factory,
+      booking_time: null,
+      subby_driver: null,
+      subby_cost: null,
+      trailer_number: null,
+      trailer_dropped: false,
+      reference: null,
+      revenue: spec.revenue,
+      billable: false,
+      invoice_status: "open",
+      xero_invoice_id: null,
+      xero_exported_at: null,
+      day_index: null,
+      day_count: null,
+    };
+  });
+
+  if (toInsert.length === 0) return { inserted: 0 };
+
+  // Use ON CONFLICT-equivalent semantics via .upsert with ignoreDuplicates so
+  // a concurrent insert (cron + page load racing on the same date) doesn't
+  // bubble a duplicate-key error.
+  const { error: insErr } = await supabase
+    .from("runs")
+    .upsert(toInsert, { onConflict: "id", ignoreDuplicates: true });
+  if (insErr) return { error: insErr.message };
+
+  return { inserted: toInsert.length };
 }
 
 /** Delete a row from the planner. */

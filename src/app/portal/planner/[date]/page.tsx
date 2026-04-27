@@ -7,7 +7,11 @@ import PlannerGrid, { type PlannerGridHandle } from "@/components/planner/Planne
 import VehicleAvailabilityStrip from "@/components/planner/VehicleAvailabilityStrip";
 import Icon from "@/components/portal/Icon";
 import { useAuth } from "@/components/AuthProvider";
-import { listRunsForDate, copyDayForward } from "@/app/actions/planner";
+import {
+  copyDayForward,
+  listRunsForDate,
+  materializeFixedRuns,
+} from "@/app/actions/planner";
 import { listTrailers, listVehicles } from "@/app/actions/fleet";
 import { fetchCustomerNames } from "@/lib/customers";
 import { isoWeekMonday, isoWeekNum, isoYear } from "@/lib/iso-week";
@@ -85,6 +89,10 @@ export default function DailyPlannerPage() {
     async function load() {
       setLoading(true);
       setError("");
+      // First, ensure the standing weekday Consolid8 fixtures exist for
+      // this date — idempotent, no-op on weekends or when already present.
+      // Runs before the listing so the new rows show up on this same load.
+      await materializeFixedRuns(date);
       const [runsRes, vehiclesRes, trailersRes, customerNames] = await Promise.all([
         listRunsForDate(date),
         listVehicles(),

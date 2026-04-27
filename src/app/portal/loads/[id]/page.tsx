@@ -25,6 +25,7 @@ import PortalMap, {
 import ShareLinkPanel from "@/components/portal/ShareLinkPanel";
 import { useToast } from "@/components/portal/ToastContext";
 import { deriveStatus, quickEta } from "@/lib/portal/loads";
+import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
 
 interface TimelineEvent {
   at: string; // ISO-ish "YYYY-MM-DD HH:MM"
@@ -38,6 +39,10 @@ export default function LoadDetailPage() {
   const id = params?.id ?? "";
   const nicknames = useNicknames();
   const [run, setRun] = useState<PlannedRun | null>(null);
+  // Siblings are other loads on the same vehicle+date — needed so we can
+  // compute chained start times for stacked customer loads (matches what the
+  // dispatch planner does for stacked runs).
+  const [siblings, setSiblings] = useState<PlannedRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -54,8 +59,24 @@ export default function LoadDetailPage() {
       if (cancelled) return;
       if (error || !data) {
         setNotFound(true);
-      } else {
-        setRun(rowToRun(data));
+        setLoading(false);
+        return;
+      }
+      const detail = rowToRun(data);
+      setRun(detail);
+
+      // Fetch siblings only when the load has a vehicle assigned — without a
+      // vehicle there's nothing to chain. Includes the current load so the
+      // chain map can sort it relative to its peers.
+      if (detail.vehicle?.trim()) {
+        const { data: sibRows } = await supabase
+          .from("loads")
+          .select("*")
+          .eq("date", detail.date)
+          .eq("vehicle", detail.vehicle);
+        if (!cancelled && sibRows) {
+          setSiblings(sibRows.map(rowToRun));
+        }
       }
       setLoading(false);
     })();
@@ -97,7 +118,7 @@ export default function LoadDetailPage() {
     );
   }
 
-  return <LoadDetailView run={run} nicknames={nicknames} />;
+  return <LoadDetailView run={run} siblings={siblings} nicknames={nicknames} />;
 }
 
 function PageHeaderBack() {
@@ -114,9 +135,11 @@ function PageHeaderBack() {
 
 function LoadDetailView({
   run,
+  siblings,
   nicknames,
 }: {
   run: PlannedRun;
+  siblings: PlannedRun[];
   nicknames: Record<string, string>;
 }) {
   const router = useRouter();
@@ -152,7 +175,15 @@ function LoadDetailView({
   }, [run.completedStopIndexes, run.progress]);
   const completedCount = completedIdx.size;
   const total = stops.length;
-  const eta = quickEta(run);
+  // When this load shares a vehicle+date with one or more siblings, surface
+  // the chained start time / ETA — matches dispatch's stacked-run handling.
+  const chains = useMemo(
+    () => computeLoadChains(siblings.length > 0 ? siblings : [run]),
+    [siblings, run],
+  );
+  const chainedInfo = chains.get(run.id);
+  const displayedStart = chainedInfo?.chainedStartTime ?? run.startTime;
+  const eta = chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run);
 
   const { coords } = usePostcodeCoords(stops);
 
@@ -262,7 +293,12 @@ function LoadDetailView({
         </div>
         <div className="stat-cell">
           <div className="l">Start time</div>
-          <div className="v mono">{run.startTime || "—"}</div>
+          <div className="v mono">{displayedStart || "—"}</div>
+          {chainedInfo && (
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              chained · booked {run.startTime}
+            </div>
+          )}
         </div>
       </div>
 

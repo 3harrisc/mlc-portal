@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { PlannedRun } from "@/types/runs";
 import { useNicknames } from "@/hooks/useNicknames";
+import { todayISO } from "@/lib/time-utils";
 import { usePortalData } from "@/components/portal/PortalDataContext";
 import { useAuth } from "@/components/AuthProvider";
 import { withNickname } from "@/lib/postcode-nicknames";
@@ -19,9 +20,13 @@ import { useToast } from "@/components/portal/ToastContext";
 import {
   matchesSearch,
   progressTuple,
-  quickEta,
   shortDate,
 } from "@/lib/portal/loads";
+import {
+  chainedEta,
+  computeLoadChains,
+  type ChainedInfo,
+} from "@/lib/portal/load-chains";
 
 type StatusFilter = "all" | LoadStatus;
 type SortKey = "date" | "customer" | "vehicle" | "id" | "eta" | "status";
@@ -34,6 +39,8 @@ interface LoadRow {
   toName: string;
   eta: string;
   progress: { completed: number; total: number };
+  /** Set when this load is leg 2+ of a stacked vehicle/date group. */
+  chained?: ChainedInfo;
 }
 
 const PAGE_SIZE = 12;
@@ -153,17 +160,29 @@ export default function LoadsPage() {
     );
   }
 
+  // Chained-start map: vehicle+date groups with >1 load get computed chain
+  // starts so leg 2's start time / ETA reflects leg 1's finish + travel,
+  // matching the dispatch planner's stacked-runs handling.
+  const chains = useMemo(
+    () => computeLoadChains(enrichedAll.map((e) => e.run)),
+    [enrichedAll],
+  );
+
   const enriched: LoadRow[] = useMemo(
     () =>
-      enrichedAll.map(({ run, status }) => ({
-        run,
-        status,
-        fromName: withNickname(run.fromPostcode, nicknames),
-        toName: withNickname(run.toPostcode, nicknames),
-        eta: quickEta(run),
-        progress: progressTuple(run),
-      })),
-    [enrichedAll, nicknames],
+      enrichedAll.map(({ run, status }) => {
+        const chained = chains.get(run.id);
+        return {
+          run,
+          status,
+          fromName: withNickname(run.fromPostcode, nicknames),
+          toName: withNickname(run.toPostcode, nicknames),
+          eta: chainedEta(run, chained),
+          progress: progressTuple(run),
+          chained,
+        };
+      }),
+    [enrichedAll, nicknames, chains],
   );
 
   const customers = useMemo(() => {
@@ -287,6 +306,13 @@ export default function LoadsPage() {
           <button className="btn" type="button">
             <Icon name="download" size={13} /> Export CSV
           </button>
+          <Link
+            href={`/portal/loads/day/${todayISO()}`}
+            className="btn"
+            title="See loads grouped by vehicle for a single day"
+          >
+            <Icon name="cal" size={13} /> Day view
+          </Link>
           <Link href="/portal/bookings" className="btn primary">
             <Icon name="plus" size={13} /> Book a collection
           </Link>
@@ -678,7 +704,16 @@ function LoadTableRow({
           {shortDate(run.date)}
         </div>
         <div className="muted" style={{ fontSize: 10.5 }}>
-          {run.startTime}
+          {row.chained ? (
+            <>
+              <span className="mono">{row.chained.chainedStartTime}</span>
+              <span style={{ marginLeft: 4, fontSize: 9.5, opacity: 0.75 }}>
+                · chained
+              </span>
+            </>
+          ) : (
+            <span className="mono">{run.startTime}</span>
+          )}
         </div>
       </RowLink>
       {isAdmin ? (

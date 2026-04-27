@@ -15,13 +15,48 @@
 
 import { createClient } from "@/lib/supabase/server";
 import type { PlannedRun, ProgressState } from "@/types/runs";
-import { runToRow } from "@/types/runs";
+import { rowToRun, runToRow } from "@/types/runs";
 
 async function getUser() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
   return { supabase, user };
+}
+
+/**
+ * All loads on a specific date, scoped by allowed_customers for non-admin
+ * users. Sorted by vehicle → run_order → start_time (matches the dispatch
+ * planner sort) so chained-start computation downstream is deterministic.
+ */
+export async function listLoadsForDate(
+  date: string,
+): Promise<{ loads?: PlannedRun[]; error?: string }> {
+  const { supabase, user } = await getUser();
+
+  // Scope check: non-admins only see their allowed_customers.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role, allowed_customers")
+    .eq("id", user.id)
+    .single();
+  const isAdmin = profile?.role === "admin";
+  const allowed: string[] = profile?.allowed_customers ?? [];
+
+  let query = supabase
+    .from("loads")
+    .select("*")
+    .eq("date", date)
+    .order("vehicle", { ascending: true, nullsFirst: false })
+    .order("run_order", { ascending: true, nullsFirst: false })
+    .order("start_time", { ascending: true });
+  if (!isAdmin) {
+    if (allowed.length === 0) return { loads: [] };
+    query = query.in("customer", allowed);
+  }
+  const { data, error } = await query;
+  if (error) return { error: error.message };
+  return { loads: (data ?? []).map(rowToRun) };
 }
 
 /** Bulk-insert customer loads. */

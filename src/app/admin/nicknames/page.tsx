@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Navigation from "@/components/Navigation";
-import { useAuth } from "@/components/AuthProvider";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
+import Icon from "@/components/portal/Icon";
 import {
   listNicknames,
   upsertNickname,
   deleteNickname,
 } from "@/app/actions/nicknames";
 
-type NicknameRow = { postcode: string; nickname: string };
+interface NicknameRow { postcode: string; nickname: string }
 
 export default function AdminNicknamesPage() {
   const { profile, loading: authLoading } = useAuth();
   const router = useRouter();
+
   const [nicknames, setNicknames] = useState<NicknameRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,221 +28,163 @@ export default function AdminNicknamesPage() {
   const [editNickname, setEditNickname] = useState("");
 
   useEffect(() => {
-    if (!authLoading && profile?.role !== "admin") {
-      router.push("/");
-    }
+    if (!authLoading && profile?.role !== "admin") router.push("/");
   }, [authLoading, profile, router]);
 
-  async function load() {
+  const load = React.useCallback(async () => {
     setLoading(true);
     const result = await listNicknames();
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setNicknames(result.nicknames);
-    }
+    if (result.error) setError(result.error);
+    else setNicknames(result.nicknames);
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    if (profile?.role === "admin") load();
-  }, [profile]);
+    if (profile?.role !== "admin") return;
+    queueMicrotask(() => { load(); });
+  }, [profile, load]);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!newPostcode.trim() || !newNickname.trim()) return;
     setFormLoading(true);
     setError("");
-
     const result = await upsertNickname(newPostcode, newNickname);
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setNewPostcode("");
-      setNewNickname("");
-      await load();
-    }
     setFormLoading(false);
+    if (result.error) { setError(result.error); return; }
+    setNewPostcode(""); setNewNickname("");
+    await load();
   }
 
   async function handleSaveEdit(postcode: string) {
     if (!editNickname.trim()) return;
     const result = await upsertNickname(postcode, editNickname);
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setEditingPc(null);
-      await load();
-    }
+    if (result.error) { setError(result.error); return; }
+    setEditingPc(null);
+    await load();
   }
 
   async function handleDelete(postcode: string) {
     if (!confirm(`Delete nickname for ${postcode}?`)) return;
     const result = await deleteNickname(postcode);
-    if (result.error) {
-      setError(result.error);
-    } else {
-      await load();
-    }
+    if (result.error) { setError(result.error); return; }
+    await load();
   }
 
-  if (authLoading || profile?.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-black text-white">
-        <Navigation />
-        <div className="max-w-4xl mx-auto p-4 md:p-8">
-          <p className="text-gray-400">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  if (authLoading || profile?.role !== "admin") return <div className="muted">Loading…</div>;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-4xl mx-auto p-4 md:p-8">
-        <h1 className="text-xl md:text-3xl font-bold mb-2">
-          Postcode Nicknames
-        </h1>
-        <p className="text-sm text-gray-400 mb-6">
-          Add friendly names to postcodes. These show alongside postcodes on
-          runs, driver pages, and reports.
-        </p>
-
-        {error && (
-          <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2 mb-4">
-            {error}
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Postcode nicknames</h1>
+          <div className="page-subtitle">
+            Friendly names for postcodes. Shown alongside postcodes on runs, the planner, and reports.
           </div>
-        )}
+        </div>
+      </div>
 
-        {/* Add form */}
-        <form
-          onSubmit={handleAdd}
-          className="flex items-end gap-3 mb-6 flex-wrap"
-        >
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">
-              Postcode
-            </label>
-            <input
-              type="text"
-              value={newPostcode}
+      {error && (
+        <div className="card" style={{ marginBottom: 12, borderColor: "var(--err)", background: "var(--err-bg)" }}>
+          <div className="card-body" style={{ color: "var(--err)", fontSize: 12.5 }}>{error}</div>
+        </div>
+      )}
+
+      <form onSubmit={handleAdd} className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>Add nickname</h3></div>
+        <div className="card-body" style={{ display: "grid", gridTemplateColumns: "150px 1fr auto", gap: 12, alignItems: "end" }}>
+          <div className="field">
+            <label>Postcode</label>
+            <input type="text" required value={newPostcode}
               onChange={(e) => setNewPostcode(e.target.value)}
-              placeholder="e.g. NG22 8TX"
-              required
-              className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-600 w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              placeholder="e.g. NG22 8TX" className="input mono" />
           </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs text-gray-400 mb-1">
-              Nickname
-            </label>
-            <input
-              type="text"
-              value={newNickname}
+          <div className="field">
+            <label>Nickname</label>
+            <input type="text" required value={newNickname}
               onChange={(e) => setNewNickname(e.target.value)}
-              placeholder="e.g. Brakes Newark"
-              required
-              className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              placeholder="e.g. Brakes Newark" className="input" />
           </div>
-          <button
-            type="submit"
-            disabled={formLoading}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
-          >
-            {formLoading ? "Adding..." : "Add"}
+          <button type="submit" className="btn primary sm" disabled={formLoading}>
+            <Icon name="plus" size={11} /> {formLoading ? "Adding…" : "Add"}
           </button>
-        </form>
+        </div>
+      </form>
 
-        {/* List */}
-        {loading ? (
-          <p className="text-gray-400">Loading...</p>
-        ) : nicknames.length === 0 ? (
-          <div className="text-gray-400 py-8 text-center">
+      {loading ? (
+        <div className="muted">Loading…</div>
+      ) : nicknames.length === 0 ? (
+        <div className="card">
+          <div className="card-body" style={{ textAlign: "center", padding: 32, color: "var(--ink-500)" }}>
             No nicknames yet. Add one above.
           </div>
-        ) : (
-          <div className="border border-white/10 rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10 bg-white/5">
-                  <th className="text-left px-4 py-2 text-gray-400 font-medium">
-                    Postcode
-                  </th>
-                  <th className="text-left px-4 py-2 text-gray-400 font-medium">
-                    Nickname
-                  </th>
-                  <th className="text-right px-4 py-2 text-gray-400 font-medium w-32">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {nicknames.map((n) => (
-                  <tr key={n.postcode}>
-                    <td className="px-4 py-2.5 font-mono text-gray-300">
-                      {n.postcode}
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Postcode</th>
+                <th>Nickname</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {nicknames.map((n) =>
+                editingPc === n.postcode ? (
+                  <tr key={n.postcode} style={{ cursor: "default", background: "var(--surface-alt)" }}>
+                    <td className="mono bold">{n.postcode}</td>
+                    <td>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editNickname}
+                        onChange={(e) => setEditNickname(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleSaveEdit(n.postcode);
+                          if (e.key === "Escape") setEditingPc(null);
+                        }}
+                        className="input"
+                        style={{ height: 28, fontSize: 12.5 }}
+                      />
                     </td>
-                    <td className="px-4 py-2.5">
-                      {editingPc === n.postcode ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={editNickname}
-                            onChange={(e) => setEditNickname(e.target.value)}
-                            className="px-2 py-1 bg-white/5 border border-white/10 rounded text-white flex-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleSaveEdit(n.postcode);
-                              if (e.key === "Escape") setEditingPc(null);
-                            }}
-                          />
-                          <button
-                            onClick={() => handleSaveEdit(n.postcode)}
-                            className="text-xs text-emerald-400 hover:text-emerald-300"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => setEditingPc(null)}
-                            className="text-xs text-gray-400 hover:text-gray-300"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        n.nickname
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {editingPc !== n.postcode && (
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingPc(n.postcode);
-                              setEditNickname(n.nickname);
-                            }}
-                            className="text-xs text-blue-400 hover:text-blue-300"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDelete(n.postcode)}
-                            className="text-xs text-red-400 hover:text-red-300"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )}
+                    <td className="right" style={{ whiteSpace: "nowrap" }}>
+                      <button type="button" className="btn primary sm" onClick={() => void handleSaveEdit(n.postcode)}>
+                        <Icon name="check" size={11} /> Save
+                      </button>
+                      <button type="button" className="btn sm ghost" onClick={() => setEditingPc(null)} style={{ marginLeft: 4 }}>
+                        Cancel
+                      </button>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
+                ) : (
+                  <tr key={n.postcode} style={{ cursor: "default" }}>
+                    <td className="mono bold">{n.postcode}</td>
+                    <td>{n.nickname}</td>
+                    <td className="right" style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        className="btn sm ghost"
+                        onClick={() => { setEditingPc(n.postcode); setEditNickname(n.nickname); }}
+                      >
+                        <Icon name="settings" size={11} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm ghost"
+                        style={{ color: "var(--err)" }}
+                        onClick={() => void handleDelete(n.postcode)}
+                      >
+                        <Icon name="x" size={11} /> Delete
+                      </button>
+                    </td>
+                  </tr>
+                )
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

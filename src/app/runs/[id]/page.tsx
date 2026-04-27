@@ -3,7 +3,6 @@
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { buildEtaChain, type EtaChainResult } from "@/lib/etaChain";
 import { createClient } from "@/lib/supabase/client";
@@ -1275,33 +1274,32 @@ export default function RunDetailPage() {
 
   if (runLoading) {
     return (
-      <div className="min-h-screen bg-black text-white">
-        <Navigation />
-        <div className="max-w-5xl mx-auto p-8">
-          <Link href="/runs" className="text-blue-400 underline">
-            ← Back to runs
-          </Link>
-          <div className="mt-6 text-gray-400">Loading run...</div>
+      <>
+        <div className="page-header">
+          <div>
+            <Link href="/runs" style={{ color: "var(--mlc-blue)" }}>← Back to runs</Link>
+          </div>
         </div>
-      </div>
+        <div className="muted">Loading run…</div>
+      </>
     );
   }
 
   if (!run) {
     return (
-      <div className="min-h-screen bg-black text-white">
-        <Navigation />
-        <div className="max-w-5xl mx-auto p-8">
-          <Link href="/runs" className="text-blue-400 underline">
-            ← Back to runs
-          </Link>
-
-          <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
-            <div className="text-xl font-semibold">Run not found</div>
-            <div className="text-gray-400 mt-2">This run ID doesn't exist.</div>
+      <>
+        <div className="page-header">
+          <div>
+            <Link href="/runs" style={{ color: "var(--mlc-blue)" }}>← Back to runs</Link>
           </div>
         </div>
-      </div>
+        <div className="card">
+          <div className="card-body">
+            <div className="bold" style={{ fontSize: 16 }}>Run not found</div>
+            <div className="muted" style={{ marginTop: 6 }}>This run ID doesn&apos;t exist.</div>
+          </div>
+        </div>
+      </>
     );
   }
 
@@ -1317,9 +1315,8 @@ export default function RunDetailPage() {
       : etaText;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
+    <>
+      <div className="run-detail-legacy">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <a href={`/runs?date=${run.date}`} className="text-blue-400 underline">
             ← Back to runs
@@ -2079,6 +2076,6 @@ export default function RunDetailPage() {
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 }

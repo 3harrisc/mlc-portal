@@ -1,20 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Navigation from "@/components/Navigation";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import Icon from "@/components/portal/Icon";
 import { createClient } from "@/lib/supabase/client";
 import { rowToRun } from "@/types/runs";
 import type { PlannedRun } from "@/types/runs";
 import { parseStops } from "@/lib/postcode-utils";
 import { todayISO, formatTime } from "@/lib/time-utils";
 
-// ── Component ────────────────────────────────────────────────────────
-
 export default function ReportsPage() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
-  const allowedCustomers = profile?.allowed_customers ?? [];
+  const allowedCustomers = useMemo(() => profile?.allowed_customers ?? [], [profile]);
 
   const [runs, setRuns] = useState<PlannedRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,31 +22,24 @@ export default function ReportsPage() {
   const [vehicleFilter, setVehicleFilter] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Fetch runs for date range
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       const supabase = createClient();
-
-      let query = supabase
+      const { data, error } = await supabase
         .from("runs")
         .select("*")
         .gte("date", dateFrom)
         .lte("date", dateTo)
         .order("date", { ascending: false });
-
-      const { data, error } = await query;
-      if (!cancelled && !error && data) {
-        setRuns(data.map(rowToRun));
-      }
+      if (!cancelled && !error && data) setRuns(data.map(rowToRun));
       if (!cancelled) setLoading(false);
     }
     load();
     return () => { cancelled = true; };
   }, [dateFrom, dateTo]);
 
-  // Build filter options from data
   const customers = useMemo(() => {
     const set = new Set(runs.map((r) => r.customer));
     return ["All", ...Array.from(set).sort()];
@@ -56,18 +47,16 @@ export default function ReportsPage() {
 
   const vehicles = useMemo(() => {
     const set = new Set(runs.map((r) => r.vehicle).filter(Boolean));
-    return ["", ...Array.from(set).sort()];
+    return Array.from(set).sort();
   }, [runs]);
 
-  // Apply filters
   const filtered = useMemo(() => {
     return runs
       .filter((r) => isAdmin || allowedCustomers.includes(r.customer))
       .filter((r) => customerFilter === "All" || r.customer === customerFilter)
       .filter((r) => !vehicleFilter || r.vehicle === vehicleFilter);
-  }, [runs, customerFilter, vehicleFilter]);
+  }, [runs, customerFilter, vehicleFilter, isAdmin, allowedCustomers]);
 
-  // Summary stats
   const totalRuns = filtered.length;
   const completedRuns = filtered.filter((r) => {
     const stops = parseStops(r.rawText);
@@ -81,213 +70,189 @@ export default function ReportsPage() {
   }).length;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
-        <h1 className="text-xl md:text-3xl font-bold mb-6">Delivery Reports</h1>
-
-        {/* Filters */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">From</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">To</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Customer</label>
-            <select
-              value={customerFilter}
-              onChange={(e) => setCustomerFilter(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
-            >
-              {customers.map((c) => (
-                <option key={c} value={c} className="bg-zinc-900">{c}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Vehicle</label>
-            <select
-              value={vehicleFilter}
-              onChange={(e) => setVehicleFilter(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent text-sm"
-            >
-              <option value="" className="bg-zinc-900">All</option>
-              {vehicles.filter(Boolean).map((v) => (
-                <option key={v} value={v} className="bg-zinc-900">{v}</option>
-              ))}
-            </select>
-          </div>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Delivery reports</h1>
+          <div className="page-subtitle">Run-level completion stats with stop-by-stop timestamps.</div>
         </div>
-
-        {/* Summary stats */}
-        <div className="grid grid-cols-3 gap-3 mb-6">
-          <div className="border border-white/10 rounded-xl p-4 bg-white/5 text-center">
-            <div className="text-2xl md:text-3xl font-bold">{totalRuns}</div>
-            <div className="text-xs text-gray-400 mt-1">Total Runs</div>
-          </div>
-          <div className="border border-emerald-400/20 rounded-xl p-4 bg-emerald-400/5 text-center">
-            <div className="text-2xl md:text-3xl font-bold text-emerald-400">{completedRuns}</div>
-            <div className="text-xs text-gray-400 mt-1">Completed</div>
-          </div>
-          <div className="border border-yellow-400/20 rounded-xl p-4 bg-yellow-400/5 text-center">
-            <div className="text-2xl md:text-3xl font-bold text-yellow-400">{inProgressRuns}</div>
-            <div className="text-xs text-gray-400 mt-1">In Progress</div>
-          </div>
-        </div>
-
-        {/* Run list */}
-        {loading ? (
-          <div className="text-gray-400 text-sm py-8 text-center">Loading...</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-gray-400 text-sm py-8 text-center">No runs found for this period.</div>
-        ) : (
-          <div className="space-y-3">
-            {filtered.map((run) => {
-              const stops = parseStops(run.rawText);
-              const completedIndexes = run.completedStopIndexes?.length
-                ? run.completedStopIndexes
-                : run.progress?.completedIdx ?? [];
-              const completedCount = completedIndexes.length;
-              const totalStops = stops.length;
-              const pct = totalStops > 0 ? Math.round((completedCount / totalStops) * 100) : 0;
-              const isExpanded = expandedId === run.id;
-
-              // Get first arrival / last departure from completed_meta
-              const meta = run.completedMeta ?? {};
-              const arrivalTimes = Object.values(meta).map((m) => m.arrivedISO ? new Date(m.arrivedISO).getTime() : m.atISO ? new Date(m.atISO).getTime() : NaN).filter((t) => !isNaN(t));
-              const departureTimes = Object.values(meta).filter((m) => m.atISO).map((m) => new Date(m.atISO!).getTime()).filter((t) => !isNaN(t));
-              const firstDelivery = arrivalTimes.length ? new Date(Math.min(...arrivalTimes)).toISOString() : null;
-              const lastDelivery = departureTimes.length ? new Date(Math.max(...departureTimes)).toISOString() : null;
-
-              const isComplete = totalStops > 0 && completedCount >= totalStops;
-
-              return (
-                <div key={run.id} className="border border-white/10 rounded-xl bg-white/5 overflow-hidden">
-                  {/* Summary row */}
-                  <button
-                    onClick={() => setExpandedId(isExpanded ? null : run.id)}
-                    className="w-full text-left p-4 hover:bg-white/5 transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-sm">{run.jobNumber}</span>
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                            isComplete
-                              ? "bg-emerald-400/10 text-emerald-400 border border-emerald-400/20"
-                              : completedCount > 0
-                                ? "bg-yellow-400/10 text-yellow-400 border border-yellow-400/20"
-                                : "bg-gray-400/10 text-gray-400 border border-gray-400/20"
-                          }`}>
-                            {isComplete ? "Complete" : completedCount > 0 ? "In Progress" : "Pending"}
-                          </span>
-                        </div>
-                        <div className="text-xs text-gray-400 mt-1">
-                          {run.date} &middot; {run.customer} &middot; {run.vehicle || "No vehicle"}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {run.fromPostcode} &rarr; {totalStops} stop{totalStops !== 1 ? "s" : ""}
-                          {run.toPostcode ? ` → ${run.toPostcode}` : ""}
-                        </div>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <div className="text-lg font-bold">{pct}%</div>
-                        <div className="text-xs text-gray-400">
-                          {completedCount}/{totalStops} stops
-                        </div>
-                        {firstDelivery && (
-                          <div className="text-xs text-gray-500 mt-1">
-                            {formatTime(firstDelivery)} – {formatTime(lastDelivery!)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Progress bar */}
-                    <div className="mt-3 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${isComplete ? "bg-emerald-400" : "bg-blue-500"}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </button>
-
-                  {/* Expanded stop detail */}
-                  {isExpanded && (
-                    <div className="border-t border-white/10 px-4 py-3 space-y-2">
-                      <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                        Stop Details
-                      </div>
-                      {stops.length === 0 ? (
-                        <div className="text-xs text-gray-500">No stops parsed.</div>
-                      ) : (
-                        stops.map((pc, idx) => {
-                          const stopMeta = meta[idx];
-                          const isDone = completedIndexes.includes(idx);
-
-                          return (
-                            <div
-                              key={idx}
-                              className="flex items-center justify-between gap-3 py-1.5 border-b border-white/5 last:border-0"
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                                  isDone
-                                    ? "bg-emerald-400/20 text-emerald-400"
-                                    : "bg-white/10 text-gray-500"
-                                }`}>
-                                  {isDone ? "\u2713" : idx + 1}
-                                </span>
-                                <span className={`text-sm ${isDone ? "text-gray-300" : "text-gray-500"}`}>
-                                  {pc}
-                                </span>
-                              </div>
-
-                              <div className="text-right">
-                                {stopMeta ? (
-                                  <div className="text-xs">
-                                    {stopMeta.arrivedISO && (
-                                      <span className="text-gray-400">Arr {formatTime(stopMeta.arrivedISO)} — </span>
-                                    )}
-                                    <span className="text-gray-300">{stopMeta.atISO ? `Left ${formatTime(stopMeta.atISO)}` : "On site"}</span>
-                                    <span className="text-gray-600 ml-1.5">
-                                      ({stopMeta.by === "auto" ? "auto" : "manual"})
-                                    </span>
-                                  </div>
-                                ) : isDone ? (
-                                  <span className="text-xs text-gray-500">Completed</span>
-                                ) : (
-                                  <span className="text-xs text-gray-600">—</span>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
-    </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-body">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <div className="field">
+              <label>From</label>
+              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="input" />
+            </div>
+            <div className="field">
+              <label>To</label>
+              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="input" />
+            </div>
+            <div className="field">
+              <label>Customer</label>
+              <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="select">
+                {customers.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Vehicle</label>
+              <select value={vehicleFilter} onChange={(e) => setVehicleFilter(e.target.value)} className="select">
+                <option value="">All</option>
+                {vehicles.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <div className="kpi">
+          <div className="kpi-label"><Icon name="list" size={12} /> Total runs</div>
+          <div className="kpi-value">{totalRuns}</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label" style={{ color: "var(--ok)" }}><Icon name="check" size={12} /> Completed</div>
+          <div className="kpi-value" style={{ color: "var(--ok)" }}>{completedRuns}</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label" style={{ color: "var(--warn)" }}><Icon name="clock" size={12} /> In progress</div>
+          <div className="kpi-value" style={{ color: "var(--warn)" }}>{inProgressRuns}</div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="muted">Loading runs…</div>
+      ) : filtered.length === 0 ? (
+        <div className="card">
+          <div className="card-body" style={{ textAlign: "center", padding: 32, color: "var(--ink-500)" }}>
+            No runs found for this period.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {filtered.map((run) => {
+            const stops = parseStops(run.rawText);
+            const completedIndexes = run.completedStopIndexes?.length
+              ? run.completedStopIndexes
+              : run.progress?.completedIdx ?? [];
+            const completedCount = completedIndexes.length;
+            const totalStops = stops.length;
+            const pct = totalStops > 0 ? Math.round((completedCount / totalStops) * 100) : 0;
+            const isExpanded = expandedId === run.id;
+
+            const meta = run.completedMeta ?? {};
+            const arrivalTimes = Object.values(meta)
+              .map((m) => m.arrivedISO ? new Date(m.arrivedISO).getTime() : m.atISO ? new Date(m.atISO).getTime() : NaN)
+              .filter((t) => !isNaN(t));
+            const departureTimes = Object.values(meta).filter((m) => m.atISO).map((m) => new Date(m.atISO!).getTime()).filter((t) => !isNaN(t));
+            const firstDelivery = arrivalTimes.length ? new Date(Math.min(...arrivalTimes)).toISOString() : null;
+            const lastDelivery = departureTimes.length ? new Date(Math.max(...departureTimes)).toISOString() : null;
+
+            const isComplete = totalStops > 0 && completedCount >= totalStops;
+            const status = isComplete ? "complete" : completedCount > 0 ? "in-progress" : "pending";
+            const pillCls = isComplete ? "delivered" : completedCount > 0 ? "in-transit" : "scheduled";
+
+            return (
+              <div key={run.id} className="card">
+                <div
+                  className="card-header"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setExpandedId(isExpanded ? null : run.id)}
+                >
+                  <h3 style={{ flex: 1, minWidth: 0 }}>
+                    <span className="row gap-8" style={{ flexWrap: "wrap" }}>
+                      <span className="mono">{run.jobNumber}</span>
+                      <span className={`pill ${pillCls}`}>
+                        <span className="dot" />
+                        {status}
+                      </span>
+                    </span>
+                    <span className="muted" style={{ fontSize: 11, fontWeight: 400, display: "block", marginTop: 2 }}>
+                      {run.date} · {run.customer} · {run.vehicle || "No vehicle"}
+                    </span>
+                  </h3>
+                  <div className="actions">
+                    <span className="bold mono tnum" style={{ fontSize: 14 }}>{pct}%</span>
+                    <span className="muted mono tnum" style={{ fontSize: 11 }}>{completedCount}/{totalStops}</span>
+                    {firstDelivery && lastDelivery && (
+                      <span className="muted mono" style={{ fontSize: 11 }}>
+                        {formatTime(firstDelivery)}–{formatTime(lastDelivery)}
+                      </span>
+                    )}
+                    <Icon name={isExpanded ? "chevD" : "chevR"} size={12} className="muted" />
+                  </div>
+                </div>
+                <div style={{ height: 4, background: "var(--surface-alt)" }}>
+                  <div
+                    style={{
+                      height: "100%",
+                      width: `${pct}%`,
+                      background: isComplete ? "var(--ok)" : "var(--info)",
+                      transition: "width 400ms",
+                    }}
+                  />
+                </div>
+
+                {isExpanded && (
+                  <div className="card-body">
+                    <div className="muted" style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", marginBottom: 8 }}>
+                      STOP DETAILS
+                    </div>
+                    {stops.length === 0 ? (
+                      <div className="muted" style={{ fontSize: 12 }}>No stops parsed.</div>
+                    ) : (
+                      <table className="data">
+                        <tbody>
+                          {stops.map((pc, idx) => {
+                            const stopMeta = meta[idx];
+                            const isDone = completedIndexes.includes(idx);
+                            return (
+                              <tr key={idx} style={{ cursor: "default" }}>
+                                <td style={{ width: 40 }}>
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      width: 22, height: 22, borderRadius: "50%",
+                                      background: isDone ? "var(--ok-bg)" : "var(--surface-alt)",
+                                      color: isDone ? "var(--ok)" : "var(--ink-400)",
+                                      fontSize: 11, fontWeight: 600,
+                                    }}
+                                  >
+                                    {isDone ? <Icon name="check" size={11} /> : idx + 1}
+                                  </span>
+                                </td>
+                                <td className="mono">{pc}</td>
+                                <td className="right" style={{ fontSize: 11 }}>
+                                  {stopMeta ? (
+                                    <>
+                                      {stopMeta.arrivedISO && (
+                                        <span className="muted">Arr {formatTime(stopMeta.arrivedISO)} </span>
+                                      )}
+                                      <span>{stopMeta.atISO ? `Left ${formatTime(stopMeta.atISO)}` : "On site"}</span>
+                                      <span className="muted" style={{ marginLeft: 6 }}>({stopMeta.by === "auto" ? "auto" : "manual"})</span>
+                                    </>
+                                  ) : isDone ? (
+                                    <span className="muted">Completed</span>
+                                  ) : (
+                                    <span className="muted">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

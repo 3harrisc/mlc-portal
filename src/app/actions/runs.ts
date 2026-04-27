@@ -99,6 +99,28 @@ export async function deleteRun(id: string) {
   return { success: true };
 }
 
+/**
+ * Delete many runs in one go. Admin-only — non-admins see only their
+ * own runs anyway, but we keep the rule explicit.
+ */
+export async function deleteRuns(ids: ReadonlyArray<string>): Promise<{
+  deleted?: number;
+  error?: string;
+}> {
+  if (!Array.isArray(ids) || ids.length === 0) return { deleted: 0 };
+  const { supabase, user } = await getUser();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "admin") return { error: "Admin role required" };
+
+  const { error } = await supabase.from("runs").delete().in("id", ids);
+  if (error) return { error: error.message };
+  return { deleted: ids.length };
+}
+
 /** Atomically get the next job number for a date (e.g. "MLC-20260218-003") */
 export async function nextJobNumber(dateISO: string) {
   const { supabase } = await getUser();

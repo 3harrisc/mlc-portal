@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import {
   DndContext,
@@ -1030,10 +1029,17 @@ export default function PlanRoutePage() {
   const opening = { open: currentCust?.open_time ?? "08:00", close: currentCust?.close_time ?? "17:00" };
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-6xl mx-auto p-8">
-        <h1 className="text-3xl font-bold mb-4">Plan Route</h1>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Plan a route</h1>
+          <div className="page-subtitle">
+            Build a route from a list of stops with HGV-aware scheduling.
+          </div>
+        </div>
+      </div>
+      <div className="plan-route-legacy">
+        {/* Heading replaced by page-header above */}
 
         {/* Route type tabs */}
         <div className="flex gap-2 mb-6">
@@ -1469,6 +1475,6 @@ export default function PlanRoutePage() {
           })()}
         </div>
       </div>
-    </div>
+    </>
   );
 }

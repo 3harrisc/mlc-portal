@@ -5,6 +5,9 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { runToRow } from "@/types/runs";
 import type { PlannedRun } from "@/types/runs";
+import { ensureCustomer } from "@/lib/customer-contacts";
+import { sendNotification } from "@/lib/email/notifications";
+import { bookingReceivedEmail } from "@/lib/email/templates";
 
 const DEFAULT_PROGRESS = {
   completedIdx: [],
@@ -706,6 +709,19 @@ export async function POST(req: Request) {
         stops: postcodeLines.length,
         name: parsed.name,
       });
+
+      // Best-effort: ensure customer profile + send booking confirmation. We
+      // never fail the inbound webhook on these — they're logged on error.
+      void afterInboundRunCreated({
+        customer: customerName,
+        runId: run.id,
+        loadRef: run.loadRef,
+        pickupPostcode: run.fromPostcode,
+        pickupDate: run.date,
+        pickupTime: run.startTime,
+        deliveryPostcode: run.toPostcode || "",
+        senderEmail: extractEmailAddress(fromAddress),
+      });
     }
 
     // 6. Log result
@@ -739,5 +755,65 @@ export async function POST(req: Request) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[email-to-run] Unexpected error:", msg);
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
+}
+
+/** Extract a bare email out of "Name <foo@bar.com>" or "foo@bar.com". */
+function extractEmailAddress(raw: string): string {
+  const match = raw.match(/<([^>]+)>/);
+  const candidate = (match?.[1] ?? raw).trim().toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(candidate) ? candidate : "";
+}
+
+interface AfterInboundArgs {
+  customer: string;
+  runId: string;
+  loadRef: string;
+  pickupPostcode: string;
+  pickupDate: string;
+  pickupTime: string;
+  deliveryPostcode: string;
+  senderEmail: string;
+}
+
+async function afterInboundRunCreated(args: AfterInboundArgs): Promise<void> {
+  try {
+    const sb = getSupabaseAdmin();
+    const customer = await ensureCustomer(sb, args.customer, {
+      contactEmail: args.senderEmail || undefined,
+      basePostcode: args.pickupPostcode,
+    });
+
+    const recipients = new Set<string>();
+    if (args.senderEmail) recipients.add(args.senderEmail);
+    for (const e of customer?.notification_emails ?? []) {
+      if (e) recipients.add(e.toLowerCase());
+    }
+    if (recipients.size === 0) return;
+
+    const baseUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
+    const internalUrl = baseUrl ? `${baseUrl}/portal/loads/${args.runId}` : undefined;
+
+    const { subject, html, text } = bookingReceivedEmail({
+      customer: args.customer,
+      contactName: customer?.primary_contact_name,
+      loadRef: args.loadRef,
+      pickupPostcode: args.pickupPostcode,
+      pickupDate: args.pickupDate,
+      pickupTime: args.pickupTime,
+      deliveryPostcode: args.deliveryPostcode,
+      pallets: 0, // we don't parse pallets out of free-text emails today
+      weightTonnes: 0,
+      shareUrl: internalUrl,
+    });
+    await sendNotification({
+      to: Array.from(recipients),
+      subject,
+      html,
+      text,
+      tag: "booking-received-inbound",
+    });
+  } catch (err: unknown) {
+    console.error("[email-to-run] afterInboundRunCreated failed", err);
   }
 }

@@ -8,8 +8,11 @@ import { useAuth } from "./AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
-  { href: "/plan-route", label: "Plan Route", adminOnly: true },
+  { href: "/portal/planner", label: "Planner", adminOnly: true },
   { href: "/runs", label: "Runs", adminOnly: false },
+  { href: "/portal/figures", label: "Figures", adminOnly: true },
+  { href: "/portal/invoicing", label: "Invoicing", adminOnly: true },
+  { href: "/plan-route", label: "Plan Route", adminOnly: true },
   { href: "/reports", label: "Reports", adminOnly: false },
 ];
 
@@ -114,6 +117,46 @@ export default function Navigation() {
                     }`}
                   >
                     Customers
+                  </Link>
+                  <Link
+                    href="/admin/xero-map"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/xero-map")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Xero Map
+                  </Link>
+                  <Link
+                    href="/admin/vehicles"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/vehicles")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Vehicles
+                  </Link>
+                  <Link
+                    href="/admin/trailers"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/trailers")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Trailers
+                  </Link>
+                  <Link
+                    href="/admin/depots"
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      isActive("/admin/depots")
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
+                        : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white border border-white/10"
+                    }`}
+                  >
+                    Depots
                   </Link>
                 </>
               )}

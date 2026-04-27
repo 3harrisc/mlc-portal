@@ -118,6 +118,35 @@ export async function updateCustomer(
   return { success: true };
 }
 
+export async function updateCustomerContacts(
+  id: string,
+  fields: {
+    notification_emails?: string[];
+    primary_contact_name?: string | null;
+  }
+) {
+  await requireAdmin();
+  const admin = getAdminClient();
+
+  const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (fields.notification_emails !== undefined) {
+    row.notification_emails = fields.notification_emails
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (fields.primary_contact_name !== undefined) {
+    const trimmed = fields.primary_contact_name?.trim() ?? null;
+    row.primary_contact_name = trimmed || null;
+  }
+
+  // Once an admin touches a customer, they own it — clear the auto_created flag.
+  row.auto_created = false;
+
+  const { error } = await admin.from("customers").update(row).eq("id", id);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
 export async function deleteCustomer(id: string) {
   await requireAdmin();
   const admin = getAdminClient();

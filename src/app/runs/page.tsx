@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import React, { useEffect, useMemo, useState } from "react";
-import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import { deleteRun as deleteRunAction, updateRunOrders } from "@/app/actions/runs";
@@ -433,79 +432,54 @@ export default function RunsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
-        {/* Header */}
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-3xl font-bold">Runs</h1>
-            <div className="text-sm text-gray-400 mt-1">
-              {unassignedCount > 0 ? (
-                <span className="text-yellow-300 font-semibold">
-                  {unassignedCount} unassigned run{unassignedCount === 1 ? "" : "s"} in this view
-                </span>
-              ) : (
-                <span>All runs assigned (in this view)</span>
-              )}
-            </div>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Runs</h1>
+          <div className="page-subtitle">
+            {unassignedCount > 0 ? (
+              <span style={{ color: "var(--warn)", fontWeight: 600 }}>
+                {unassignedCount} unassigned run{unassignedCount === 1 ? "" : "s"} in this view
+              </span>
+            ) : (
+              <span>All runs assigned (in this view)</span>
+            )}
           </div>
-          <Link href="/plan-route" className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">
-            + Plan a route
-          </Link>
         </div>
+        <Link href="/plan-route" className="btn primary">+ Plan a route</Link>
+      </div>
 
-        {/* Filters */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-5 gap-4">
-          <div>
-            <label className="block text-sm font-semibold mb-2">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
-            />
+      {/* Filters */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-body">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+          <div className="field">
+            <label>Date</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
           </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">Customer</label>
-            <select
-              value={customer}
-              onChange={(e) => setCustomer(e.target.value as CustomerKey | "All")}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
-            >
-              <option value="All" className="bg-black">All</option>
-              {customerNames.map((c) => (
-                <option key={c} value={c} className="bg-black">{c}</option>
-              ))}
+          <div className="field">
+            <label>Customer</label>
+            <select value={customer} onChange={(e) => setCustomer(e.target.value as CustomerKey | "All")} className="select">
+              <option value="All">All</option>
+              {customerNames.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">Vehicle</label>
-            <select
-              value={vehicle}
-              onChange={(e) => setVehicle(e.target.value)}
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
-            >
-              <option value="" className="bg-black">All</option>
-              {vehicles.map((v) => (
-                <option key={v} value={v} className="bg-black">{v}</option>
-              ))}
+          <div className="field">
+            <label>Vehicle</label>
+            <select value={vehicle} onChange={(e) => setVehicle(e.target.value)} className="select">
+              <option value="">All</option>
+              {vehicles.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-semibold mb-2">Search</label>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Job, ref, postcode..."
-              className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
-            />
+          <div className="field">
+            <label>Search</label>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Job, ref, postcode…" className="input" />
           </div>
 
-          <div className="flex items-end">
+          <div className="field" style={{ alignSelf: "flex-end" }}>
             <button
               onClick={() => {
                 setCustomer("All");
@@ -513,20 +487,25 @@ export default function RunsPage() {
                 setDate(todayISO());
                 setSearch("");
               }}
-              className="w-full px-4 py-2 rounded-lg border border-white/15 hover:bg-white/10"
+              className="btn"
+              style={{ width: "100%" }}
             >
               Reset filters
             </button>
           </div>
+          </div>
         </div>
+      </div>
 
-        {/* Runs list */}
-        <div className="mt-6 space-y-4">
+      {/* Runs list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {loading ? (
-            <div className="text-gray-400 border border-white/10 rounded-2xl p-4 bg-white/5">Loading runs...</div>
+            <div className="card"><div className="card-body muted">Loading runs…</div></div>
           ) : filtered.length === 0 && carryOver.length === 0 ? (
-            <div className="text-gray-400 border border-white/10 rounded-2xl p-4 bg-white/5">
-              No runs found. Create one in <Link className="text-blue-400 underline" href="/plan-route">Plan Route</Link>.
+            <div className="card">
+              <div className="card-body muted">
+                No runs found. Create one in <Link href="/plan-route" style={{ color: "var(--mlc-blue)" }}>Plan Route</Link>.
+              </div>
             </div>
           ) : (
             <>
@@ -623,7 +602,6 @@ export default function RunsPage() {
             </>
           )}
         </div>
-      </div>
-    </div>
+    </>
   );
 }

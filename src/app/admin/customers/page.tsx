@@ -1,20 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Navigation from "@/components/Navigation";
 import { useAuth } from "@/components/AuthProvider";
-import { listCustomers, createCustomer, updateCustomer, deleteCustomer } from "./actions";
+import Icon from "@/components/portal/Icon";
+import {
+  listCustomers,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+} from "./actions";
 
-type CustomerRow = {
+interface CustomerRow {
   id: string;
   name: string;
   base_postcode: string;
   open_time: string;
   close_time: string;
   run_count: number;
-};
+}
+
+interface EditFields {
+  name: string;
+  base_postcode: string;
+  open_time: string;
+  close_time: string;
+}
 
 export default function AdminCustomersPage() {
   const { profile, loading: authLoading } = useAuth();
@@ -24,7 +36,7 @@ export default function AdminCustomersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // New customer form
+  // New customer
   const [showForm, setShowForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPostcode, setNewPostcode] = useState("");
@@ -33,65 +45,52 @@ export default function AdminCustomersPage() {
   const [formError, setFormError] = useState("");
   const [formLoading, setFormLoading] = useState(false);
 
-  // Inline editing
+  // Inline edit
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editFields, setEditFields] = useState<{
-    name: string;
-    base_postcode: string;
-    open_time: string;
-    close_time: string;
-  }>({ name: "", base_postcode: "", open_time: "", close_time: "" });
+  const [editFields, setEditFields] = useState<EditFields>({
+    name: "",
+    base_postcode: "",
+    open_time: "",
+    close_time: "",
+  });
 
-  // Redirect non-admins
-  useEffect(() => {
-    if (!authLoading && profile?.role !== "admin") {
-      router.push("/");
-    }
-  }, [authLoading, profile, router]);
-
-  // Load customers
-  useEffect(() => {
-    if (profile?.role === "admin") {
-      loadCustomers();
-    }
-  }, [profile]);
-
-  async function loadCustomers() {
+  const load = React.useCallback(async () => {
     setLoading(true);
     const result = await listCustomers();
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setCustomers(result.customers);
-    }
+    if (result.error) setError(result.error);
+    else setCustomers(result.customers);
     setLoading(false);
-  }
+  }, []);
+
+  useEffect(() => {
+    if (!authLoading && profile?.role !== "admin") router.push("/");
+  }, [authLoading, profile, router]);
+
+  useEffect(() => {
+    if (profile?.role !== "admin") return;
+    queueMicrotask(() => { load(); });
+  }, [profile, load]);
 
   async function handleAddCustomer(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
-    setFormLoading(true);
-
     if (!newName.trim()) {
       setFormError("Name is required.");
-      setFormLoading(false);
       return;
     }
-
+    setFormLoading(true);
     const result = await createCustomer(newName, newPostcode, newOpen, newClose);
+    setFormLoading(false);
     if (result.error) {
       setFormError(result.error);
-      setFormLoading(false);
       return;
     }
-
     setNewName("");
     setNewPostcode("");
     setNewOpen("08:00");
     setNewClose("17:00");
     setShowForm(false);
-    setFormLoading(false);
-    await loadCustomers();
+    await load();
   }
 
   function startEditing(c: CustomerRow) {
@@ -113,238 +112,237 @@ export default function AdminCustomersPage() {
       return;
     }
     setEditingId(null);
-    await loadCustomers();
+    await load();
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`Are you sure you want to delete "${name}"? This cannot be undone.`)) {
-      return;
-    }
-    const result = await deleteCustomer(id);
+  async function handleDelete(c: CustomerRow) {
+    if (!confirm(`Delete "${c.name}"? This cannot be undone.`)) return;
+    const result = await deleteCustomer(c.id);
     if (result.error) {
       setError(result.error);
       return;
     }
-    await loadCustomers();
+    await load();
   }
 
   if (authLoading || profile?.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-black text-white">
-        <Navigation />
-        <div className="max-w-6xl mx-auto p-4 md:p-8">
-          <p className="text-gray-400">Loading...</p>
-        </div>
-      </div>
-    );
+    return <div className="muted">Loading…</div>;
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
-        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-          <div>
-            <h1 className="text-xl md:text-3xl font-bold">Customer Management</h1>
-            <Link href="/admin/nicknames" className="text-sm text-blue-400 hover:text-blue-300 mt-1 inline-block">
-              Manage postcode nicknames &rarr;
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Customers</h1>
+          <div className="page-subtitle">
+            Manage customer accounts, opening hours, and base postcodes.{" "}
+            <Link href="/admin/nicknames" style={{ color: "var(--mlc-blue)" }}>
+              Manage postcode nicknames →
             </Link>
           </div>
+        </div>
+        <div className="row gap-8">
           <button
-            onClick={() => setShowForm(!showForm)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors"
+            type="button"
+            className="btn primary sm"
+            onClick={() => setShowForm((v) => !v)}
           >
-            {showForm ? "Cancel" : "Add Customer"}
+            <Icon name={showForm ? "x" : "plus"} size={11} />
+            {showForm ? "Cancel" : "New customer"}
           </button>
         </div>
+      </div>
 
-        {error && (
-          <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2 mb-4">
-            {error}
-          </div>
-        )}
+      {error && (
+        <div className="card" style={{ marginBottom: 12, borderColor: "var(--err)", background: "var(--err-bg)" }}>
+          <div className="card-body" style={{ color: "var(--err)", fontSize: 12.5 }}>{error}</div>
+        </div>
+      )}
 
-        {/* Add Customer Form */}
-        {showForm && (
-          <form
-            onSubmit={handleAddCustomer}
-            className="bg-white/5 border border-white/10 rounded-lg p-4 mb-6 space-y-3"
-          >
-            <h2 className="text-lg font-semibold mb-2">Add Customer</h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Name</label>
-                <input
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. Acme Logistics"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Base Postcode</label>
-                <input
-                  type="text"
-                  value={newPostcode}
-                  onChange={(e) => setNewPostcode(e.target.value)}
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. GL2 7ND"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Opening Time</label>
-                <input
-                  type="time"
-                  value={newOpen}
-                  onChange={(e) => setNewOpen(e.target.value)}
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Closing Time</label>
-                <input
-                  type="time"
-                  value={newClose}
-                  onChange={(e) => setNewClose(e.target.value)}
-                  className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+      {showForm && (
+        <form
+          onSubmit={handleAddCustomer}
+          className="card"
+          style={{ marginBottom: 16 }}
+        >
+          <div className="card-header"><h3>New customer</h3></div>
+          <div className="card-body" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <div className="field">
+              <label>Name</label>
+              <input
+                type="text"
+                required
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Acme Logistics"
+                className="input"
+              />
             </div>
-
+            <div className="field">
+              <label>Base postcode</label>
+              <input
+                type="text"
+                value={newPostcode}
+                onChange={(e) => setNewPostcode(e.target.value)}
+                placeholder="e.g. GL2 7ND"
+                className="input"
+              />
+            </div>
+            <div className="field">
+              <label>Opening time</label>
+              <input
+                type="time"
+                value={newOpen}
+                onChange={(e) => setNewOpen(e.target.value)}
+                className="input"
+              />
+            </div>
+            <div className="field">
+              <label>Closing time</label>
+              <input
+                type="time"
+                value={newClose}
+                onChange={(e) => setNewClose(e.target.value)}
+                className="input"
+              />
+            </div>
             {formError && (
-              <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
+              <div style={{ gridColumn: "span 2", color: "var(--err)", fontSize: 12.5 }}>
                 {formError}
               </div>
             )}
+            <div style={{ gridColumn: "span 2", display: "flex", justifyContent: "flex-end" }}>
+              <button type="submit" className="btn primary sm" disabled={formLoading}>
+                <Icon name="check" size={11} /> {formLoading ? "Saving…" : "Add customer"}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
 
-            <button
-              type="submit"
-              disabled={formLoading}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
-            >
-              {formLoading ? "Creating..." : "Create Customer"}
-            </button>
-          </form>
-        )}
-
-        {/* Customers List */}
-        {loading ? (
-          <p className="text-gray-400">Loading customers...</p>
-        ) : (
-          <div className="space-y-3">
-            {customers.map((c) => (
-              <div key={c.id} className="border border-white/10 rounded-xl bg-white/5 p-4">
-                {editingId === c.id ? (
-                  /* Editing mode */
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">Name</label>
-                        <input
-                          type="text"
-                          value={editFields.name}
-                          onChange={(e) => setEditFields({ ...editFields, name: e.target.value })}
-                          className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">Base Postcode</label>
-                        <input
-                          type="text"
-                          value={editFields.base_postcode}
-                          onChange={(e) => setEditFields({ ...editFields, base_postcode: e.target.value })}
-                          className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">Opening Time</label>
+      {loading ? (
+        <div className="muted">Loading customers…</div>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Base postcode</th>
+                <th>Hours</th>
+                <th className="right">Runs</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {customers.map((c) =>
+                editingId === c.id ? (
+                  <tr key={c.id} style={{ cursor: "default", background: "var(--surface-alt)" }}>
+                    <td>
+                      <input
+                        type="text"
+                        value={editFields.name}
+                        onChange={(e) => setEditFields({ ...editFields, name: e.target.value })}
+                        className="input"
+                        style={{ height: 28, fontSize: 12.5 }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        value={editFields.base_postcode}
+                        onChange={(e) => setEditFields({ ...editFields, base_postcode: e.target.value })}
+                        className="input"
+                        style={{ height: 28, fontSize: 12.5 }}
+                      />
+                    </td>
+                    <td>
+                      <span className="row gap-4">
                         <input
                           type="time"
                           value={editFields.open_time}
                           onChange={(e) => setEditFields({ ...editFields, open_time: e.target.value })}
-                          className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="input"
+                          style={{ height: 28, fontSize: 12.5, width: 100 }}
                         />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-400 mb-1">Closing Time</label>
+                        <span className="muted">–</span>
                         <input
                           type="time"
                           value={editFields.close_time}
                           onChange={(e) => setEditFields({ ...editFields, close_time: e.target.value })}
-                          className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="input"
+                          style={{ height: 28, fontSize: 12.5, width: 100 }}
                         />
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={saveEditing}
-                        className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
-                      >
-                        Save
+                      </span>
+                    </td>
+                    <td className="right mono tnum">{c.run_count}</td>
+                    <td className="right" style={{ whiteSpace: "nowrap" }}>
+                      <button type="button" className="btn primary sm" onClick={() => void saveEditing()}>
+                        <Icon name="check" size={11} /> Save
                       </button>
                       <button
+                        type="button"
+                        className="btn sm ghost"
                         onClick={() => setEditingId(null)}
-                        className="px-3 py-1.5 text-xs rounded-lg border border-white/10 text-gray-400 hover:bg-white/10 transition-colors"
+                        style={{ marginLeft: 4 }}
                       >
                         Cancel
                       </button>
-                    </div>
-                  </div>
+                    </td>
+                  </tr>
                 ) : (
-                  /* Display mode */
-                  <>
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div>
-                        <div className="font-semibold text-sm">{c.name}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">
-                          {c.base_postcode ? `Base: ${c.base_postcode}` : "No base postcode"} &middot;{" "}
-                          {c.open_time}&ndash;{c.close_time}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold px-2 py-1 rounded bg-blue-400/10 text-blue-400">
-                          {c.run_count} run{c.run_count === 1 ? "" : "s"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2 flex-wrap">
-                      <button
-                        onClick={() => startEditing(c)}
-                        className="text-xs px-3 py-1.5 rounded-lg border border-blue-400/30 text-blue-400 hover:bg-blue-400/10 transition-colors"
-                      >
-                        Edit
-                      </button>
-
+                  <tr key={c.id} style={{ cursor: "default" }}>
+                    <td className="bold">{c.name}</td>
+                    <td className="mono">
+                      {c.base_postcode || <span className="muted">—</span>}
+                    </td>
+                    <td className="mono">
+                      {c.open_time}–{c.close_time}
+                    </td>
+                    <td className="right">
                       {c.run_count > 0 ? (
                         <Link
                           href={`/runs?customer=${encodeURIComponent(c.name)}`}
-                          className="text-xs px-3 py-1.5 rounded-lg border border-emerald-400/30 text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                          className="mono tnum"
+                          style={{ color: "var(--mlc-blue)" }}
                         >
-                          View runs
+                          {c.run_count}
                         </Link>
-                      ) : null}
-
+                      ) : (
+                        <span className="muted mono tnum">0</span>
+                      )}
+                    </td>
+                    <td className="right" style={{ whiteSpace: "nowrap" }}>
                       <button
-                        onClick={() => handleDelete(c.id, c.name)}
-                        className="text-xs px-3 py-1.5 rounded-lg border border-red-400/30 text-red-400 hover:bg-red-400/10 transition-colors"
+                        type="button"
+                        className="btn sm ghost"
+                        onClick={() => startEditing(c)}
                       >
-                        Delete
+                        <Icon name="settings" size={11} /> Edit
                       </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-            {customers.length === 0 && (
-              <div className="py-8 text-center text-gray-500">No customers found</div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+                      <button
+                        type="button"
+                        className="btn sm ghost"
+                        style={{ color: "var(--err)" }}
+                        onClick={() => void handleDelete(c)}
+                      >
+                        <Icon name="x" size={11} /> Delete
+                      </button>
+                    </td>
+                  </tr>
+                )
+              )}
+              {customers.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ textAlign: "center", padding: 32, color: "var(--ink-500)" }}>
+                    No customers yet. Click <strong>+ New customer</strong> to add one.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

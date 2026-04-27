@@ -10,6 +10,16 @@ export type Customer = {
 
 export type RunType = "regular" | "backload";
 
+/**
+ * Invoice lifecycle.
+ *  - 'open'      : not yet flagged for billing
+ *  - 'billable'  : flagged for billing but not yet exported
+ *  - 'sent'      : included in a Xero CSV export
+ *  - 'paid'      : marked paid (set manually or by future Xero webhook)
+ *  - 'cancelled' : will not be billed
+ */
+export type InvoiceStatus = "open" | "billable" | "sent" | "paid" | "cancelled";
+
 export type PlannedRun = {
   id: string;
   jobNumber: string;
@@ -32,6 +42,24 @@ export type PlannedRun = {
   runOrder: number | null;
   collectionTime?: string; // HH:MM booking time at collection (backloads)
   collectionDate?: string; // YYYY-MM-DD if collection is on a different day to delivery
+  // Planner-extension fields (migration 008). All optional so legacy rows keep working.
+  factory?: string;
+  bookingTime?: string;
+  subbyDriver?: string;
+  subbyCost?: number;
+  trailerNumber?: string;
+  trailerDropped?: boolean;
+  reference?: string;
+  // Multi-day trip indicator (migration 010): "Day {dayIndex} OF {dayCount}".
+  // Both undefined → single-day leg.
+  dayIndex?: number;
+  dayCount?: number;
+  // Invoicing
+  revenue?: number;
+  billable?: boolean;
+  invoiceStatus?: InvoiceStatus;
+  xeroInvoiceId?: string;
+  xeroExportedAt?: string; // ISO timestamp
 };
 
 export type ProgressState = {
@@ -72,6 +100,10 @@ export type RouteTemplate = {
 };
 
 /** Map a Supabase `runs` row (snake_case) to a PlannedRun (camelCase) */
+// `any` is used here intentionally — Supabase row shapes drift over time and
+// we want this mapper to tolerate missing columns without throwing. Adding new
+// columns is safe; removing is not.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function rowToRun(row: any): PlannedRun {
   return {
     id: row.id,
@@ -95,6 +127,20 @@ export function rowToRun(row: any): PlannedRun {
     runOrder: row.run_order ?? null,
     collectionTime: row.collection_time ?? undefined,
     collectionDate: row.collection_date ?? undefined,
+    factory: row.factory ?? undefined,
+    bookingTime: row.booking_time ?? undefined,
+    subbyDriver: row.subby_driver ?? undefined,
+    subbyCost: row.subby_cost == null ? undefined : Number(row.subby_cost),
+    trailerNumber: row.trailer_number ?? undefined,
+    trailerDropped: row.trailer_dropped ?? false,
+    reference: row.reference ?? undefined,
+    dayIndex: row.day_index ?? undefined,
+    dayCount: row.day_count ?? undefined,
+    revenue: row.revenue == null ? 0 : Number(row.revenue),
+    billable: row.billable ?? false,
+    invoiceStatus: (row.invoice_status as InvoiceStatus) ?? "open",
+    xeroInvoiceId: row.xero_invoice_id ?? undefined,
+    xeroExportedAt: row.xero_exported_at ?? undefined,
   };
 }
 
@@ -122,6 +168,20 @@ export function runToRow(run: PlannedRun, userId?: string) {
     run_order: run.runOrder ?? null,
     collection_time: run.collectionTime ?? null,
     collection_date: run.collectionDate ?? null,
+    factory: run.factory ?? null,
+    booking_time: run.bookingTime ?? null,
+    subby_driver: run.subbyDriver ?? null,
+    subby_cost: run.subbyCost ?? null,
+    trailer_number: run.trailerNumber ?? null,
+    trailer_dropped: run.trailerDropped ?? false,
+    reference: run.reference ?? null,
+    day_index: run.dayIndex ?? null,
+    day_count: run.dayCount ?? null,
+    revenue: run.revenue ?? 0,
+    billable: run.billable ?? false,
+    invoice_status: run.invoiceStatus ?? "open",
+    xero_invoice_id: run.xeroInvoiceId ?? null,
+    xero_exported_at: run.xeroExportedAt ?? null,
   };
 }
 

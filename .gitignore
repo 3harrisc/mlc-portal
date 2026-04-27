@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# extraction outputs from scripts/extract_master_planner.py — regenerable
+/tmp/

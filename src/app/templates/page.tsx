@@ -182,34 +182,31 @@ export default function TemplatesPage() {
   const summary = useMemo(() => ({ templates: templates.length, runs: runsCount }), [templates.length, runsCount]);
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="max-w-6xl mx-auto p-8">
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <Link href="/runs" className="text-blue-400 underline">
-              ← Back to runs
-            </Link>
-            <h1 className="text-3xl font-bold mt-4">Templates</h1>
-            <div className="text-sm text-gray-400 mt-2">
-              Save repeat routes (Mon–Fri) and generate runs for the next X weeks.
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {msg ? (
-              <div className="text-sm px-3 py-2 rounded-lg border border-white/15 bg-white/5">
-                {msg}
-              </div>
-            ) : null}
-            <div className="text-sm text-gray-300">
-              Templates: <span className="font-semibold">{summary.templates}</span> • Runs:{" "}
-              <span className="font-semibold">{summary.runs}</span>
-            </div>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Templates</h1>
+          <div className="page-subtitle">
+            Save repeat routes (Mon–Fri) and generate runs for the next X weeks.
           </div>
         </div>
+        <div className="row gap-8">
+          {msg && (
+            <span className="pill scheduled" style={{ fontSize: 11 }}>
+              <span className="dot" />{msg}
+            </span>
+          )}
+          <span className="muted" style={{ fontSize: 12 }}>
+            <span className="bold">{summary.templates}</span> templates ·{" "}
+            <span className="bold">{summary.runs}</span> runs
+          </span>
+        </div>
+      </div>
 
-        <div className="mt-8 border border-white/10 rounded-2xl p-6 bg-white/5">
-          <div className="text-lg font-semibold mb-4">Create template</div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>Create template</h3></div>
+        <div className="card-body">
+          <div className="text-lg font-semibold mb-4" style={{ display: "none" }}>Create template</div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -217,7 +214,7 @@ export default function TemplatesPage() {
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
                 placeholder="e.g. North West Artic Run"
               />
             </div>
@@ -227,7 +224,7 @@ export default function TemplatesPage() {
               <select
                 value={customer}
                 onChange={(e) => setCustomer(e.target.value as CustomerKey)}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
               >
                 {customerNames.map((c) => (
                   <option key={c} className="bg-black" value={c}>{c}</option>
@@ -240,7 +237,7 @@ export default function TemplatesPage() {
               <input
                 value={fromPostcode}
                 onChange={(e) => setFromPostcode(e.target.value)}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
                 placeholder="e.g. GL2 7ND"
               />
             </div>
@@ -273,7 +270,7 @@ export default function TemplatesPage() {
                 type="time"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
               />
             </div>
 
@@ -284,7 +281,7 @@ export default function TemplatesPage() {
                 min={0}
                 value={serviceMins}
                 onChange={(e) => setServiceMins(Number(e.target.value || 0))}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
               />
             </div>
 
@@ -318,24 +315,24 @@ export default function TemplatesPage() {
               <textarea
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
-                className="w-full h-40 border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="textarea"
+                style={{ width: "100%", height: 140 }}
                 placeholder={`Paste one per line (times allowed)\nLS9 0AB 14:00\nM1 1AA 09:00\n...`}
               />
             </div>
           </div>
 
-          <div className="mt-4 flex gap-3 flex-wrap">
-            <button onClick={handleCreateTemplate} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500">
-              Save template
-            </button>
-            <Link href="/plan-route" className="px-4 py-2 rounded-lg border border-white/15 hover:bg-white/10">
-              Go to Plan Route
-            </Link>
+          <div className="row gap-8" style={{ marginTop: 16 }}>
+            <button onClick={handleCreateTemplate} className="btn primary sm">Save template</button>
+            <Link href="/plan-route" className="btn sm">Plan a route</Link>
           </div>
         </div>
+      </div>
 
-        <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
-          <div className="text-lg font-semibold mb-4">Repeat (Mon–Fri) for X weeks</div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header"><h3>Repeat (Mon–Fri) for X weeks</h3></div>
+        <div className="card-body">
+          <div className="text-lg font-semibold mb-4" style={{ display: "none" }}>Repeat</div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -344,7 +341,7 @@ export default function TemplatesPage() {
                 type="date"
                 value={repeatFrom}
                 onChange={(e) => setRepeatFrom(e.target.value)}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
               />
               <div className="text-xs text-gray-500 mt-2">We generate weekdays only, starting from this date.</div>
             </div>
@@ -356,45 +353,53 @@ export default function TemplatesPage() {
                 min={1}
                 value={weeks}
                 onChange={(e) => setWeeks(Math.max(1, Number(e.target.value || 1)))}
-                className="w-full border border-white/15 rounded-lg px-3 py-2 bg-transparent"
+                className="input"
               />
               <div className="text-xs text-gray-500 mt-2">Example: 4 weeks = generate Mon–Fri for the next month.</div>
             </div>
 
-            <div className="flex items-end">
-              <div className="text-sm text-gray-400">
-                Pick a template below and hit <span className="text-white font-semibold">Create runs</span>.
-                Runs will be unassigned.
+            <div style={{ alignSelf: "flex-end" }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Pick a template below and hit <span className="bold">Create runs</span>. Runs will be unassigned.
               </div>
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
-          <div className="text-lg font-semibold mb-4">Saved templates</div>
-
+      <div className="card">
+        <div className="card-header">
+          <h3>Saved templates</h3>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {templates.length} template{templates.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="card-body">
           {loading ? (
-            <div className="text-gray-400">Loading templates...</div>
+            <div className="muted">Loading templates…</div>
           ) : templates.length === 0 ? (
-            <div className="text-gray-400">No templates yet. Create one above.</div>
+            <div className="muted">No templates yet. Create one above.</div>
           ) : (
-            <div className="space-y-3">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {templates.map((t) => {
                 const wk = getWeekdays(t);
                 return (
                   <div
                     key={t.id}
-                    className="border border-white/10 rounded-2xl p-4 flex items-start justify-between gap-4 flex-wrap"
+                    style={{
+                      border: "1px solid var(--line)", borderRadius: 8, padding: 12,
+                      display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+                    }}
                   >
-                    <div className="min-w-[260px]">
-                      <div className="text-lg font-semibold">{t.name}</div>
-                      <div className="text-sm text-gray-400 mt-1">
-                        {t.customer} • From {t.fromPostcode} •{" "}
-                        {t.returnToBase ? "Return to base" : `To ${t.toPostcode || "(last stop)"}`} •{" "}
-                        {t.startTime} • Service {t.serviceMins}m • Breaks {t.includeBreaks ? "On" : "Off"}
+                    <div style={{ minWidth: 260 }}>
+                      <div className="bold" style={{ fontSize: 14 }}>{t.name}</div>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        {t.customer} · From <span className="mono">{t.fromPostcode}</span> ·{" "}
+                        {t.returnToBase ? "Return to base" : `To ${t.toPostcode || "(last stop)"}`} ·{" "}
+                        {t.startTime} · Service {t.serviceMins}m · Breaks {t.includeBreaks ? "On" : "Off"}
                       </div>
-                      <div className="text-xs text-gray-500 mt-2">
-                        Active:{" "}
+                      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                        Active days:{" "}
                         {(["mon", "tue", "wed", "thu", "fri"] as const)
                           .filter((k) => wk[k])
                           .map((k) => k.toUpperCase())
@@ -402,37 +407,25 @@ export default function TemplatesPage() {
                       </div>
                     </div>
 
-                    <div className="flex gap-2 flex-wrap">
-                      <button
-                        onClick={() => handleCreateRuns(t)}
-                        disabled={busy}
-                        className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm disabled:opacity-50"
-                      >
-                        {busy ? "Creating..." : "Create runs"}
+                    <div className="row gap-8" style={{ flexWrap: "wrap" }}>
+                      <button onClick={() => handleCreateRuns(t)} disabled={busy} className="btn primary sm">
+                        {busy ? "Creating…" : "Create runs"}
                       </button>
-
-                      <button
-                        onClick={() => handleDeleteTemplate(t.id)}
-                        className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm"
-                      >
+                      <button onClick={() => handleDeleteTemplate(t.id)} className="btn sm ghost" style={{ color: "var(--err)" }}>
                         Delete
                       </button>
-
-                      <Link href="/runs" className="px-3 py-2 rounded-lg border border-white/15 hover:bg-white/10 text-sm">
-                        View runs
-                      </Link>
+                      <Link href="/runs" className="btn sm">View runs</Link>
                     </div>
                   </div>
                 );
               })}
             </div>
           )}
-
-          <div className="mt-4 text-xs text-gray-500">
+          <div className="muted" style={{ fontSize: 11, marginTop: 12 }}>
             Next upgrade: preview before creating + duplicate prevention + vehicle pick per day.
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

@@ -1,75 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import Navigation from "@/components/Navigation";
-import { useAuth } from "@/components/AuthProvider";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
-import type { PlannedRun } from "@/types/runs";
+import Icon from "@/components/portal/Icon";
 import { rowToRun } from "@/types/runs";
+import type { PlannedRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { parseStops } from "@/lib/postcode-utils";
 
-type DriverInfo = {
+interface DriverInfo {
   id: string;
   email: string;
   full_name: string | null;
   assigned_vehicle: string | null;
-};
+}
 
-type DriverStatus = {
+type DriverStatusKind =
+  | "no_vehicle"
+  | "no_run"
+  | "not_started"
+  | "in_progress"
+  | "complete";
+
+interface DriverStatus {
   driver: DriverInfo;
   run: PlannedRun | null;
   stops: string[];
   completedCount: number;
   totalStops: number;
   currentStopIdx: number | null;
-  status: "no_vehicle" | "no_run" | "not_started" | "in_progress" | "complete";
-};
+  status: DriverStatusKind;
+}
 
-function getStatus(ds: DriverStatus): {
-  label: string;
-  color: string;
-  bgColor: string;
-  borderColor: string;
-} {
-  switch (ds.status) {
-    case "complete":
-      return {
-        label: "COMPLETE",
-        color: "text-emerald-400",
-        bgColor: "bg-emerald-500/5",
-        borderColor: "border-emerald-500/40",
-      };
-    case "in_progress":
-      return {
-        label: `${ds.completedCount}/${ds.totalStops} STOPS`,
-        color: "text-blue-400",
-        bgColor: "bg-blue-500/5",
-        borderColor: "border-blue-500/40",
-      };
-    case "not_started":
-      return {
-        label: "NOT STARTED",
-        color: "text-gray-400",
-        bgColor: "bg-white/5",
-        borderColor: "border-white/10",
-      };
-    case "no_run":
-      return {
-        label: "NO RUN TODAY",
-        color: "text-yellow-400",
-        bgColor: "bg-yellow-500/5",
-        borderColor: "border-yellow-500/30",
-      };
-    case "no_vehicle":
-      return {
-        label: "NO VEHICLE",
-        color: "text-red-400",
-        bgColor: "bg-red-500/5",
-        borderColor: "border-red-500/30",
-      };
+function statusPill(s: DriverStatusKind): { label: string; cls: string } {
+  switch (s) {
+    case "complete":    return { label: "Complete", cls: "delivered" };
+    case "in_progress": return { label: "In progress", cls: "in-transit" };
+    case "not_started": return { label: "Not started", cls: "scheduled" };
+    case "no_run":      return { label: "No run today", cls: "delayed" };
+    case "no_vehicle":  return { label: "No vehicle", cls: "exception" };
   }
 }
 
@@ -81,64 +53,35 @@ export default function AdminDriversPage() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   useEffect(() => {
-    if (!authLoading && profile?.role !== "admin") {
-      router.push("/");
-    }
+    if (!authLoading && profile?.role !== "admin") router.push("/");
   }, [authLoading, profile, router]);
 
-  async function loadData() {
+  const loadData = React.useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
     const today = todayISO();
 
-    // Fetch all drivers
-    const { data: drivers } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, assigned_vehicle")
-      .eq("role", "driver")
-      .eq("active", true)
-      .order("email");
-
-    // Fetch today's runs
-    const { data: runsData } = await supabase
-      .from("runs")
-      .select("*")
-      .eq("date", today);
+    const [{ data: drivers }, { data: runsData }] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, email, full_name, assigned_vehicle")
+        .eq("role", "driver")
+        .eq("active", true)
+        .order("email"),
+      supabase.from("runs").select("*").eq("date", today),
+    ]);
 
     const runs = (runsData ?? []).map(rowToRun);
-
-    // Build driver status list
-    const statuses: DriverStatus[] = (drivers ?? []).map((driver) => {
-      if (!driver.assigned_vehicle?.trim()) {
-        return {
-          driver,
-          run: null,
-          stops: [],
-          completedCount: 0,
-          totalStops: 0,
-          currentStopIdx: null,
-          status: "no_vehicle" as const,
-        };
+    const statuses: DriverStatus[] = (drivers ?? []).map((d: DriverInfo) => {
+      if (!d.assigned_vehicle?.trim()) {
+        return { driver: d, run: null, stops: [], completedCount: 0, totalStops: 0, currentStopIdx: null, status: "no_vehicle" };
       }
-
       const matchedRun = runs.find(
-        (r) =>
-          r.vehicle.trim().toUpperCase() ===
-          driver.assigned_vehicle!.trim().toUpperCase()
+        (r) => r.vehicle.trim().toUpperCase() === d.assigned_vehicle!.trim().toUpperCase()
       );
-
       if (!matchedRun) {
-        return {
-          driver,
-          run: null,
-          stops: [],
-          completedCount: 0,
-          totalStops: 0,
-          currentStopIdx: null,
-          status: "no_run" as const,
-        };
+        return { driver: d, run: null, stops: [], completedCount: 0, totalStops: 0, currentStopIdx: null, status: "no_run" };
       }
-
       const stops = parseStops(matchedRun.rawText);
       const completedCount = Math.max(
         (matchedRun.completedStopIndexes ?? []).length,
@@ -146,210 +89,159 @@ export default function AdminDriversPage() {
       );
       const currentStopIdx = matchedRun.progress?.onSiteIdx ?? null;
       const isComplete = stops.length > 0 && completedCount >= stops.length;
-
-      let status: DriverStatus["status"];
-      if (isComplete) {
-        status = "complete";
-      } else if (completedCount > 0 || currentStopIdx != null) {
-        status = "in_progress";
-      } else {
-        status = "not_started";
-      }
-
-      return {
-        driver,
-        run: matchedRun,
-        stops,
-        completedCount,
-        totalStops: stops.length,
-        currentStopIdx,
-        status,
-      };
+      const status: DriverStatusKind = isComplete
+        ? "complete"
+        : completedCount > 0 || currentStopIdx != null
+        ? "in_progress"
+        : "not_started";
+      return { driver: d, run: matchedRun, stops, completedCount, totalStops: stops.length, currentStopIdx, status };
     });
 
     setDriverStatuses(statuses);
     setLastRefresh(new Date());
     setLoading(false);
-  }
+  }, []);
 
   useEffect(() => {
-    if (profile?.role === "admin") {
-      loadData();
-      const timer = setInterval(loadData, 60_000);
-      return () => clearInterval(timer);
-    }
-  }, [profile]);
+    if (profile?.role !== "admin") return;
+    queueMicrotask(() => { loadData(); });
+    const timer = setInterval(loadData, 60_000);
+    return () => clearInterval(timer);
+  }, [profile, loadData]);
 
-  // Summary counts
   const summary = useMemo(() => {
-    const total = driverStatuses.length;
-    const complete = driverStatuses.filter((d) => d.status === "complete").length;
-    const inProgress = driverStatuses.filter((d) => d.status === "in_progress").length;
-    const notStarted = driverStatuses.filter((d) => d.status === "not_started").length;
-    const noRun = driverStatuses.filter((d) => d.status === "no_run").length;
-    const noVehicle = driverStatuses.filter((d) => d.status === "no_vehicle").length;
-    return { total, complete, inProgress, notStarted, noRun, noVehicle };
+    const byStatus: Record<DriverStatusKind, number> = {
+      complete: 0, in_progress: 0, not_started: 0, no_run: 0, no_vehicle: 0,
+    };
+    for (const ds of driverStatuses) byStatus[ds.status]++;
+    return { ...byStatus, total: driverStatuses.length };
   }, [driverStatuses]);
 
-  if (authLoading || profile?.role !== "admin") {
-    return (
-      <div className="min-h-screen bg-black text-white">
-        <Navigation />
-        <div className="max-w-6xl mx-auto p-4 md:p-8">
-          <p className="text-gray-400">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  if (authLoading || profile?.role !== "admin") return <div className="muted">Loading…</div>;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <Navigation />
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
-        <div className="flex items-end justify-between gap-4 flex-wrap mb-6">
-          <div>
-            <h1 className="text-xl md:text-3xl font-bold">Driver Overview</h1>
-            <p className="text-sm text-gray-400 mt-1">
-              {todayISO()} &mdash; {summary.total} driver{summary.total !== 1 ? "s" : ""}
-              {lastRefresh && (
-                <span className="ml-2 text-gray-600">
-                  Updated {lastRefresh.toLocaleTimeString()}
-                </span>
-              )}
-            </p>
-          </div>
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-sm transition-colors disabled:opacity-50"
-          >
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-          <div className="border border-blue-500/30 bg-blue-500/5 rounded-xl p-3 text-center">
-            <div className="text-2xl font-bold text-blue-400">{summary.inProgress}</div>
-            <div className="text-xs text-gray-400 mt-1">In Progress</div>
-          </div>
-          <div className="border border-emerald-500/30 bg-emerald-500/5 rounded-xl p-3 text-center">
-            <div className="text-2xl font-bold text-emerald-400">{summary.complete}</div>
-            <div className="text-xs text-gray-400 mt-1">Complete</div>
-          </div>
-          <div className="border border-white/10 bg-white/5 rounded-xl p-3 text-center">
-            <div className="text-2xl font-bold text-gray-400">{summary.notStarted}</div>
-            <div className="text-xs text-gray-400 mt-1">Not Started</div>
-          </div>
-          <div className="border border-yellow-500/30 bg-yellow-500/5 rounded-xl p-3 text-center">
-            <div className="text-2xl font-bold text-yellow-400">{summary.noRun}</div>
-            <div className="text-xs text-gray-400 mt-1">No Run</div>
-          </div>
-          <div className="border border-red-500/30 bg-red-500/5 rounded-xl p-3 text-center">
-            <div className="text-2xl font-bold text-red-400">{summary.noVehicle}</div>
-            <div className="text-xs text-gray-400 mt-1">No Vehicle</div>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Driver overview</h1>
+          <div className="page-subtitle">
+            {todayISO()} · {summary.total} driver{summary.total !== 1 ? "s" : ""}
+            {lastRefresh && <span className="muted" style={{ marginLeft: 8 }}>Updated {lastRefresh.toLocaleTimeString()}</span>}
           </div>
         </div>
-
-        {/* Driver list */}
-        {loading && driverStatuses.length === 0 ? (
-          <p className="text-gray-400">Loading drivers...</p>
-        ) : driverStatuses.length === 0 ? (
-          <div className="text-gray-400 py-8 text-center">
-            No active drivers found. Add driver users in{" "}
-            <Link href="/admin/users" className="text-blue-400 underline">
-              User Management
-            </Link>
-            .
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {driverStatuses.map((ds) => {
-              const st = getStatus(ds);
-              return (
-                <div
-                  key={ds.driver.id}
-                  className={`border ${st.borderColor} ${st.bgColor} rounded-xl p-4`}
-                >
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm truncate">
-                          {ds.driver.full_name || ds.driver.email}
-                        </span>
-                        {ds.driver.assigned_vehicle && (
-                          <span className="text-xs font-mono px-2 py-0.5 rounded bg-white/10 text-gray-300">
-                            {ds.driver.assigned_vehicle}
-                          </span>
-                        )}
-                        <span
-                          className={`text-xs font-semibold px-2 py-0.5 rounded ${st.color} bg-black/20`}
-                        >
-                          {st.label}
-                        </span>
-                      </div>
-
-                      {ds.run && (
-                        <div className="text-xs text-gray-400 mt-1.5">
-                          <span className="font-medium text-gray-300">
-                            {ds.run.jobNumber}
-                          </span>
-                          <span className="mx-1.5">&middot;</span>
-                          {ds.run.customer}
-                          <span className="mx-1.5">&middot;</span>
-                          {ds.totalStops} stop{ds.totalStops !== 1 ? "s" : ""}
-                          {ds.status === "in_progress" && (
-                            <>
-                              <span className="mx-1.5">&middot;</span>
-                              <span className="text-blue-400">
-                                {ds.totalStops - ds.completedCount} remaining
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Progress bar */}
-                      {ds.run && ds.totalStops > 0 && (
-                        <div className="mt-2 h-1.5 bg-white/10 rounded-full overflow-hidden w-full max-w-xs">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              ds.status === "complete"
-                                ? "bg-emerald-500"
-                                : "bg-blue-500"
-                            }`}
-                            style={{
-                              width: `${Math.round(
-                                (ds.completedCount / ds.totalStops) * 100
-                              )}%`,
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* Current stop info */}
-                      {ds.currentStopIdx != null && ds.stops[ds.currentStopIdx] && (
-                        <div className="text-xs text-yellow-400 mt-1">
-                          On site at stop {ds.currentStopIdx + 1}: {ds.stops[ds.currentStopIdx]}
-                        </div>
-                      )}
-                    </div>
-
-                    {ds.run && (
-                      <Link
-                        href={`/runs/${ds.run.id}`}
-                        className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors shrink-0"
-                      >
-                        View Run
-                      </Link>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <button type="button" className="btn sm" onClick={() => void loadData()} disabled={loading}>
+          <Icon name="refresh" size={11} /> {loading ? "Refreshing…" : "Refresh"}
+        </button>
       </div>
+
+      <div className="kpi-grid">
+        <Stat label="In progress" value={summary.in_progress} accent="var(--info)" />
+        <Stat label="Complete"    value={summary.complete}    accent="var(--ok)" />
+        <Stat label="Not started" value={summary.not_started} />
+        <Stat label="No run"      value={summary.no_run}      accent="var(--warn)" />
+      </div>
+
+      {loading && driverStatuses.length === 0 ? (
+        <div className="muted">Loading drivers…</div>
+      ) : driverStatuses.length === 0 ? (
+        <div className="card">
+          <div className="card-body" style={{ textAlign: "center", padding: 32, color: "var(--ink-500)" }}>
+            No active drivers. Add driver users in{" "}
+            <Link href="/admin/users" style={{ color: "var(--mlc-blue)" }}>User management</Link>.
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Driver</th>
+                <th>Vehicle</th>
+                <th>Status</th>
+                <th>Run</th>
+                <th>Progress</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {driverStatuses.map((ds) => {
+                const pill = statusPill(ds.status);
+                const pct = ds.totalStops > 0 ? Math.round((ds.completedCount / ds.totalStops) * 100) : 0;
+                return (
+                  <tr key={ds.driver.id} style={{ cursor: "default" }}>
+                    <td>
+                      <div className="bold">{ds.driver.full_name ?? ds.driver.email}</div>
+                      {ds.driver.full_name && (
+                        <div className="muted" style={{ fontSize: 11 }}>{ds.driver.email}</div>
+                      )}
+                    </td>
+                    <td className="mono">
+                      {ds.driver.assigned_vehicle ?? <span className="muted">—</span>}
+                    </td>
+                    <td>
+                      <span className={`pill ${pill.cls}`}>
+                        <span className="dot" />{pill.label}
+                      </span>
+                    </td>
+                    <td>
+                      {ds.run ? (
+                        <>
+                          <div className="bold mono" style={{ fontSize: 11.5 }}>{ds.run.jobNumber || "—"}</div>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {ds.run.customer} · {ds.totalStops} stop{ds.totalStops !== 1 ? "s" : ""}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {ds.run && ds.totalStops > 0 ? (
+                        <>
+                          <div style={{
+                            height: 6, background: "var(--surface-alt)", borderRadius: 3,
+                            overflow: "hidden", maxWidth: 160,
+                          }}>
+                            <div style={{
+                              height: "100%", width: `${pct}%`,
+                              background: ds.status === "complete" ? "var(--ok)" : "var(--info)",
+                              transition: "width 400ms",
+                            }} />
+                          </div>
+                          <div className="muted mono tnum" style={{ fontSize: 11, marginTop: 3 }}>
+                            {ds.completedCount}/{ds.totalStops}
+                            {ds.currentStopIdx != null && ds.stops[ds.currentStopIdx] && (
+                              <> · on site at {ds.stops[ds.currentStopIdx]}</>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="right">
+                      {ds.run && (
+                        <Link href={`/runs/${ds.run.id}`} className="btn primary sm">
+                          <Icon name="arrowR" size={11} /> Run
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Stat({ label, value, accent }: { label: string; value: number; accent?: string }) {
+  return (
+    <div className="kpi">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value" style={accent ? { color: accent } : undefined}>{value}</div>
     </div>
   );
 }

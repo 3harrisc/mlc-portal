@@ -37,6 +37,11 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
+  // Public share-link tracking pages: token-gated, no login required.
+  if (pathname.startsWith("/track/")) {
+    return supabaseResponse;
+  }
+
   // Unauthenticated user trying to access protected route
   if (!user && pathname !== "/login" && !pathname.startsWith("/auth/")) {
     // API routes: return 401 JSON instead of redirect

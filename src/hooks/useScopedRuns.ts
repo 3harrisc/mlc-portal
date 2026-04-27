@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import { rowToRun, type PlannedRun } from "@/types/runs";
@@ -9,6 +9,13 @@ interface ScopedRunsResult {
   runs: PlannedRun[];
   loading: boolean;
   error: Error | null;
+  /**
+   * Re-run the runs query without a full page reload. Used after mutations
+   * (bulk delete, inline vehicle assignment, etc.) so the table reflects the
+   * server state without losing the user's place / scroll position /
+   * unrelated UI state.
+   */
+  refetch: () => void;
 }
 
 /**
@@ -24,11 +31,17 @@ export function useScopedRuns(): ScopedRunsResult {
   const [runs, setRuns] = useState<PlannedRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const refetch = useCallback(() => {
+    setRefreshTick((t) => t + 1);
+  }, []);
 
   useEffect(() => {
     if (authLoading) return;
     const supabase = createClient();
     let cancelled = false;
+    setLoading(true);
     void (async () => {
       const { data, error: queryError } = await supabase
         .from("runs")
@@ -40,13 +53,14 @@ export function useScopedRuns(): ScopedRunsResult {
         setRuns([]);
       } else {
         setRuns((data ?? []).map(rowToRun));
+        setError(null);
       }
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [authLoading]);
+  }, [authLoading, refreshTick]);
 
   const isAdmin = profile?.role === "admin";
   const allowedKey = (profile?.allowed_customers ?? []).join("|");
@@ -56,5 +70,5 @@ export function useScopedRuns(): ScopedRunsResult {
     return runs.filter((r) => isAdmin || allowed.has(r.customer));
   }, [runs, isAdmin, allowedKey]);
 
-  return { runs: scoped, loading, error };
+  return { runs: scoped, loading, error, refetch };
 }

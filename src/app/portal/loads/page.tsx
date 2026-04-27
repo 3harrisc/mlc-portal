@@ -47,7 +47,7 @@ const STATUSES: StatusFilter[] = [
 ];
 
 export default function LoadsPage() {
-  const { enriched: enrichedAll, loading } = usePortalData();
+  const { enriched: enrichedAll, loading, refetch } = usePortalData();
   const { query } = usePortalSearch();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
@@ -107,10 +107,15 @@ export default function LoadsPage() {
       setDeleteError(res.error);
       return;
     }
+    // Reset the view so the operator lands back at "All customers / All
+    // statuses / page 1" instead of staying on a now-empty filtered slice.
     setSelected(new Set());
-    // Refresh the cached data — usePortalData reloads on its own ticker, but
-    // a hard reload guarantees the deleted rows disappear right away.
-    window.location.reload();
+    setStatusFilter("all");
+    setCustomerFilter("all");
+    setPage(1);
+    // Re-fetch instead of full page reload — keeps scroll position, sidebar
+    // state, etc. intact while the deleted rows disappear from the table.
+    refetch();
   }
 
   const enriched: LoadRow[] = useMemo(

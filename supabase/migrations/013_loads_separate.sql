@@ -7,119 +7,136 @@
 -- `runs` table. That meant:
 --   1. Bulk-deleting on /portal/loads wiped rows from the planner too.
 --   2. Customer portal bookings (`createPortalBooking`, id LIKE 'portal-%')
---      were polluting the invoicing view because they sat next to real
---      dispatch runs in the same table.
+--      were polluting the invoicing view.
 --
 -- This migration splits the two:
 --   * `loads`  — customer pre-bookings + Ashwood forward planning.
 --   * `runs`   — dispatch planner (unchanged).
 --
 -- Schema is identical so we can reuse the existing PlannedRun type +
--- rowToRun / runToRow converters. The only thing that differs is the table.
+-- rowToRun / runToRow converters. Rather than re-listing every column
+-- (which risks type drift — collection_date came from a UI-side ALTER and
+-- ended up `text` in production, not `date` like an earlier draft of this
+-- migration assumed), we use `CREATE TABLE loads (LIKE runs INCLUDING ALL)`
+-- so column types and defaults are guaranteed to match runs exactly.
 --
--- Data migration (one-shot, idempotent via "if loads is empty" guard):
---   * Copy Ashwood non-legacy rows from runs → loads (forward planning).
---   * Copy ALL portal-booked rows (id LIKE 'portal-%') from runs → loads.
---   * Delete those moved rows from runs so they no longer appear in the
---     planner / invoicing / figures totals.
+-- LIKE does NOT copy foreign keys, so we re-add the `created_by` FK by hand.
+--
+-- Data migration (one-shot, idempotent via "loads is empty" guard):
+--   * Move Ashwood non-legacy rows from runs → loads (forward planning).
+--   * Move ALL portal-booked rows (id LIKE 'portal-%') from runs → loads.
+-- Done atomically with DELETE … RETURNING so there's no race window.
 --
 -- Legacy Excel imports (id LIKE 'legacy-%') stay in `runs` for invoicing
 -- reconciliation regardless of customer.
 
 -------------------------------------------------------------------------------
--- 1. Create the loads table — exact mirror of runs (+ same indexes & RLS).
+-- 0. If a previous, broken run created an empty `loads` table with drifted
+--    types, drop it so we can recreate cleanly. Only drops when empty so
+--    re-running this migration is safe.
 -------------------------------------------------------------------------------
 
-create table if not exists loads (
-  id                       text primary key,
-  job_number               text not null default '',
-  load_ref                 text not null default '',
-  date                     date not null,
-  customer                 text not null,
-  vehicle                  text not null default '',
-  from_postcode            text not null,
-  to_postcode              text not null default '',
-  return_to_base           boolean not null default true,
-  start_time               text not null default '08:00',
-  service_mins             integer not null default 25,
-  include_breaks           boolean not null default true,
-  raw_text                 text not null default '',
-  completed_stop_indexes   integer[] not null default '{}',
-  completed_meta           jsonb not null default '{}',
-  progress                 jsonb not null default '{"completedIdx":[],"onSiteIdx":null,"onSiteSinceMs":null,"lastInside":false}',
-  created_by               uuid references profiles(id),
-  created_at               timestamptz not null default now(),
-  -- Mirrored from migration 006 (share token)
-  share_token              text,
-  share_token_created_at   timestamptz,
-  -- Mirrored from migration 008 (planner / invoicing extension columns)
-  factory                  text,
-  booking_time             text,
-  subby_driver             text,
-  subby_cost               numeric(10, 2),
-  trailer_number           text,
-  trailer_dropped          boolean not null default false,
-  reference                text,
-  revenue                  numeric(10, 2) not null default 0,
-  billable                 boolean not null default false,
-  invoice_status           text not null default 'open',
-  xero_invoice_id          text,
-  xero_exported_at         timestamptz,
-  -- Mirrored from migration 010 (multi-day indicator)
-  day_index                integer,
-  day_count                integer,
-  -- Mirrored from runs.run_type / run_order / collection_time / collection_date
-  run_type                 text not null default 'regular',
-  run_order                integer,
-  collection_time          text,
-  collection_date          date
-);
-
--- Same constraint runs has on invoice_status.
 do $$
+declare
+  v_exists boolean;
+  v_count  integer;
 begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'loads_invoice_status_check'
-  ) then
-    alter table loads
-      add constraint loads_invoice_status_check
-      check (invoice_status in ('open', 'billable', 'sent', 'paid', 'cancelled'));
+  select exists (
+    select 1 from information_schema.tables
+    where table_schema = current_schema() and table_name = 'loads'
+  ) into v_exists;
+
+  if v_exists then
+    execute 'select count(*) from loads' into v_count;
+    if v_count = 0 then
+      raise notice 'loads table exists but is empty — dropping for clean recreate';
+      drop table loads cascade;
+    else
+      raise notice 'loads table exists with % rows — leaving it alone', v_count;
+    end if;
   end if;
 end $$;
 
-create index if not exists loads_date_idx          on loads (date desc);
-create index if not exists loads_customer_idx      on loads (customer);
-create index if not exists loads_load_ref_idx      on loads (load_ref) where load_ref <> '';
-create unique index if not exists loads_share_token_unique
-  on loads (share_token) where share_token is not null;
+-------------------------------------------------------------------------------
+-- 1. Create `loads` as an exact structural clone of `runs`.
+--    INCLUDING ALL preserves: defaults, constraints, indexes, identity,
+--    storage, comments, statistics. It does NOT copy foreign keys — those
+--    are re-added below.
+-------------------------------------------------------------------------------
+
+create table if not exists loads (like runs including all);
+
+-- Re-add the created_by → profiles(id) FK that LIKE doesn't copy.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint c
+    join pg_class t on t.oid = c.conrelid
+    where t.relname = 'loads' and c.conname = 'loads_created_by_fkey'
+  ) then
+    alter table loads
+      add constraint loads_created_by_fkey
+      foreign key (created_by) references profiles(id);
+  end if;
+end $$;
 
 -------------------------------------------------------------------------------
--- 2. RLS — match the runs policies (admins everything; everyone else gated by
---    profile.allowed_customers in app code, same as the runs flow).
+-- 2. RLS — same posture as runs (admins everything; customer scoping is
+--    enforced in app code via profile.allowed_customers, identical to the
+--    runs flow).
 -------------------------------------------------------------------------------
 
 alter table loads enable row level security;
 
-create policy "Authenticated users can read loads"
-  on loads for select
-  using (auth.uid() is not null);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = current_schema() and tablename = 'loads'
+      and policyname = 'Authenticated users can read loads'
+  ) then
+    create policy "Authenticated users can read loads"
+      on loads for select
+      using (auth.uid() is not null);
+  end if;
 
-create policy "Authenticated users can insert loads"
-  on loads for insert
-  with check (auth.uid() is not null);
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = current_schema() and tablename = 'loads'
+      and policyname = 'Authenticated users can insert loads'
+  ) then
+    create policy "Authenticated users can insert loads"
+      on loads for insert
+      with check (auth.uid() is not null);
+  end if;
 
-create policy "Authenticated users can update loads"
-  on loads for update
-  using (auth.uid() is not null);
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = current_schema() and tablename = 'loads'
+      and policyname = 'Authenticated users can update loads'
+  ) then
+    create policy "Authenticated users can update loads"
+      on loads for update
+      using (auth.uid() is not null);
+  end if;
 
-create policy "Authenticated users can delete loads"
-  on loads for delete
-  using (auth.uid() is not null);
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = current_schema() and tablename = 'loads'
+      and policyname = 'Authenticated users can delete loads'
+  ) then
+    create policy "Authenticated users can delete loads"
+      on loads for delete
+      using (auth.uid() is not null);
+  end if;
+end $$;
 
 -------------------------------------------------------------------------------
 -- 3. One-shot data migration runs ↦ loads.
---    Guarded with "only when loads is empty" so re-running the migration is a
---    no-op. If you need to re-migrate, truncate `loads` first.
+--    Atomic via DELETE … RETURNING into a CTE so there's no window where a
+--    concurrent insert into runs could be deleted but never copied across.
+--    Guarded with "only when loads is empty" so re-running is a no-op.
 -------------------------------------------------------------------------------
 
 do $$
@@ -133,11 +150,13 @@ begin
     return;
   end if;
 
-  -- Atomic move: DELETE … RETURNING into a CTE, then INSERT the returned
-  -- rows into loads. This avoids any race window where a concurrent insert
-  -- to runs could be deleted but never copied across.
+  -- Atomic move: DELETE matching rows from runs, INSERT them into loads.
   --   a) Ashwood non-legacy rows (forward planning lives on /portal/loads).
   --   b) All portal bookings (id like 'portal-%') so they leave invoicing.
+  --
+  -- Because loads has identical structure to runs (CREATE TABLE LIKE runs),
+  -- we can omit the column lists entirely — `insert into loads select * from
+  -- moved` is type-safe.
   with moved as (
     delete from runs
     where (
@@ -146,26 +165,8 @@ begin
     )
     returning *
   )
-  insert into loads (
-    id, job_number, load_ref, date, customer, vehicle,
-    from_postcode, to_postcode, return_to_base, start_time, service_mins,
-    include_breaks, raw_text, completed_stop_indexes, completed_meta, progress,
-    created_by, created_at, share_token, share_token_created_at,
-    factory, booking_time, subby_driver, subby_cost, trailer_number,
-    trailer_dropped, reference, revenue, billable, invoice_status,
-    xero_invoice_id, xero_exported_at, day_index, day_count,
-    run_type, run_order, collection_time, collection_date
-  )
-  select
-    id, job_number, load_ref, date, customer, vehicle,
-    from_postcode, to_postcode, return_to_base, start_time, service_mins,
-    include_breaks, raw_text, completed_stop_indexes, completed_meta, progress,
-    created_by, created_at, share_token, share_token_created_at,
-    factory, booking_time, subby_driver, subby_cost, trailer_number,
-    trailer_dropped, reference, revenue, billable, invoice_status,
-    xero_invoice_id, xero_exported_at, day_index, day_count,
-    run_type, run_order, collection_time, collection_date
-  from moved;
+  insert into loads
+  select * from moved;
 
   get diagnostics v_moved = row_count;
   raise notice 'Moved % rows from runs to loads', v_moved;

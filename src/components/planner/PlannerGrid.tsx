@@ -1,6 +1,20 @@
 "use client";
 
 import React, { useMemo, useState, useImperativeHandle, forwardRef } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  horizontalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { PlannedRun } from "@/types/runs";
 import {
   updatePlannerCell,
@@ -8,32 +22,42 @@ import {
   deletePlannerRun,
 } from "@/app/actions/planner";
 import Icon from "@/components/portal/Icon";
-import { useResizableColumns, type ColumnDef } from "@/hooks/useResizableColumns";
-import ResizableHeader from "@/components/planner/ResizableHeader";
+import { useColumnPrefs, type ColumnDef } from "@/hooks/useColumnPrefs";
 
 /**
- * Column definitions for the planner grid. Drag-resizable; widths persist
- * in localStorage per-device (so the iPad and the dispatch monitor each
- * remember their own layout).
+ * Reorder/resize-able column definitions for the planner grid.
+ * Both order and width persist in localStorage per-device.
+ *
+ * The leading 4px tint stripe and the trailing Delete column are NOT in
+ * this list — they're frame, not user-rearrangeable content.
  */
-const PLANNER_COLUMNS: ReadonlyArray<ColumnDef> = [
-  { id: "collection",      defaultWidth: 140, minWidth: 70 },
-  { id: "delivery",        defaultWidth: 170, minWidth: 70 },
-  { id: "days",            defaultWidth: 92,  minWidth: 70 },
-  { id: "factory",         defaultWidth: 88,  minWidth: 50 },
-  { id: "booking",         defaultWidth: 80,  minWidth: 50 },
-  { id: "vehicle",         defaultWidth: 86,  minWidth: 60 },
-  { id: "subby_driver",    defaultWidth: 90,  minWidth: 50 },
-  { id: "subby_cost",      defaultWidth: 76,  minWidth: 50 },
-  { id: "trailer_number",  defaultWidth: 76,  minWidth: 50 },
-  { id: "trailer_dropped", defaultWidth: 56,  minWidth: 40 },
-  { id: "reference",       defaultWidth: 110, minWidth: 60 },
-  { id: "customer",        defaultWidth: 130, minWidth: 70 },
-  { id: "revenue",         defaultWidth: 88,  minWidth: 60 },
-  { id: "bill",            defaultWidth: 50,  minWidth: 40 },
-  { id: "status",          defaultWidth: 90,  minWidth: 60 },
-  { id: "delete",          defaultWidth: 70,  minWidth: 50 },
+type Align = "left" | "center" | "right";
+interface PlannerColDef extends ColumnDef {
+  label: string;
+  align?: Align;
+}
+
+const PLANNER_COLUMNS: ReadonlyArray<PlannerColDef> = [
+  { id: "collection",      label: "Collection",   defaultWidth: 140, minWidth: 70 },
+  { id: "delivery",        label: "Delivery",     defaultWidth: 170, minWidth: 70 },
+  { id: "days",            label: "DAYS",         defaultWidth: 92,  minWidth: 70, align: "center" },
+  { id: "factory",         label: "FACTORY",      defaultWidth: 88,  minWidth: 50 },
+  { id: "booking",         label: "Booking",      defaultWidth: 80,  minWidth: 50 },
+  { id: "vehicle",         label: "Vehicle",      defaultWidth: 86,  minWidth: 60 },
+  { id: "subby_driver",    label: "SUBBY/DRIVER", defaultWidth: 90,  minWidth: 50 },
+  { id: "subby_cost",      label: "SUBBY £",      defaultWidth: 76,  minWidth: 50, align: "right" },
+  { id: "trailer_number",  label: "Trailer #",    defaultWidth: 76,  minWidth: 50 },
+  { id: "trailer_dropped", label: "Drop?",        defaultWidth: 56,  minWidth: 40, align: "center" },
+  { id: "reference",       label: "Reference",    defaultWidth: 110, minWidth: 60 },
+  { id: "customer",        label: "Customer",     defaultWidth: 130, minWidth: 70 },
+  { id: "revenue",         label: "Revenue",      defaultWidth: 88,  minWidth: 60, align: "right" },
+  { id: "bill",            label: "Bill?",        defaultWidth: 50,  minWidth: 40, align: "center" },
+  { id: "status",          label: "Status",       defaultWidth: 90,  minWidth: 60 },
 ];
+
+const COLUMN_BY_ID: Record<string, PlannerColDef> = Object.fromEntries(
+  PLANNER_COLUMNS.map((c) => [c.id, c])
+);
 
 /**
  * The "DAILY TRANSPORT SHEET" — the source of truth for the day's runs.
@@ -76,11 +100,24 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Drag-resizable column widths, persisted per-device in localStorage.
-  const { widths, setWidth, reset: resetColumnWidths } = useResizableColumns(
+  // Drag-reorder + drag-resize column prefs, persisted per-device.
+  const { widths, order, setWidth, reorder, reset: resetColumnPrefs } = useColumnPrefs(
     "planner-grid",
     PLANNER_COLUMNS
   );
+
+  // dnd-kit sensors. The 8px distance threshold means short clicks on a
+  // header don't accidentally start a drag — gives the resize handle and
+  // any future click handlers a fair go.
+  const sortSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
+
+  function handleHeaderDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    reorder(String(active.id), String(over.id));
+  }
 
   const initialKey = useMemo(() => initialRuns.map((r) => r.id).join("|"), [initialRuns]);
   const lastKey = React.useRef(initialKey);
@@ -203,57 +240,54 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
               fontSize: 12,
               // Width = sum of visible column widths; horizontal scroll appears
               // when this exceeds the container, which is fine on iPad.
-              width: visibleColumnsWidthSum(widths, showSubbyCost, editable),
+              width: visibleColumnsWidthSum(widths, order, showSubbyCost, editable),
             }}
           >
             {/*
-              Drag-resizable widths persisted in localStorage per-device.
-              Tint stripe is always 4px (not user-resizable); everything
-              else is on the user's hook. See useResizableColumns.ts.
+              Drag-resize widths AND drag-reorder columns, both persisted in
+              localStorage per-device. Tint stripe (left) and Delete column
+              (right) are frame — not user-rearrangeable.
             */}
             <colgroup>
               <col style={{ width: 4 }} />{/* tint stripe — fixed */}
-              <col style={{ width: widths.collection }} />
-              <col style={{ width: widths.delivery }} />
-              <col style={{ width: widths.days }} />
-              <col style={{ width: widths.factory }} />
-              <col style={{ width: widths.booking }} />
-              <col style={{ width: widths.vehicle }} />
-              <col style={{ width: widths.subby_driver }} />
-              {showSubbyCost && <col style={{ width: widths.subby_cost }} />}
-              <col style={{ width: widths.trailer_number }} />
-              <col style={{ width: widths.trailer_dropped }} />
-              <col style={{ width: widths.reference }} />
-              <col style={{ width: widths.customer }} />
-              <col style={{ width: widths.revenue }} />
-              <col style={{ width: widths.bill }} />
-              <col style={{ width: widths.status }} />
-              {editable && <col style={{ width: widths.delete }} />}
+              {order.map((id) => {
+                if (id === "subby_cost" && !showSubbyCost) return null;
+                return <col key={id} style={{ width: widths[id] }} />;
+              })}
+              {editable && <col style={{ width: 70 }} />}{/* Delete */}
             </colgroup>
             <thead>
-              <tr>
-                <th />{/* row tint indicator — not resizable */}
-                <ResizableHeader colId="collection" width={widths.collection} minWidth={70} onResize={setWidth}>Collection</ResizableHeader>
-                <ResizableHeader colId="delivery"   width={widths.delivery}   minWidth={70} onResize={setWidth}>Delivery</ResizableHeader>
-                <ResizableHeader colId="days"       width={widths.days}       minWidth={70} onResize={setWidth} align="center">DAYS</ResizableHeader>
-                <ResizableHeader colId="factory"    width={widths.factory}    minWidth={50} onResize={setWidth}>FACTORY</ResizableHeader>
-                <ResizableHeader colId="booking"    width={widths.booking}    minWidth={50} onResize={setWidth}>Booking</ResizableHeader>
-                <ResizableHeader colId="vehicle"    width={widths.vehicle}    minWidth={60} onResize={setWidth}>Vehicle</ResizableHeader>
-                <ResizableHeader colId="subby_driver" width={widths.subby_driver} minWidth={50} onResize={setWidth}>SUBBY/DRIVER</ResizableHeader>
-                {showSubbyCost && (
-                  <ResizableHeader colId="subby_cost" width={widths.subby_cost} minWidth={50} onResize={setWidth} align="right">SUBBY £</ResizableHeader>
-                )}
-                <ResizableHeader colId="trailer_number" width={widths.trailer_number} minWidth={50} onResize={setWidth}>Trailer #</ResizableHeader>
-                <ResizableHeader colId="trailer_dropped" width={widths.trailer_dropped} minWidth={40} onResize={setWidth} align="center" className="" >
-                  <span title="Trailer dropped?">Drop?</span>
-                </ResizableHeader>
-                <ResizableHeader colId="reference"  width={widths.reference}  minWidth={60} onResize={setWidth}>Reference</ResizableHeader>
-                <ResizableHeader colId="customer"   width={widths.customer}   minWidth={70} onResize={setWidth}>Customer</ResizableHeader>
-                <ResizableHeader colId="revenue"    width={widths.revenue}    minWidth={60} onResize={setWidth} align="right">Revenue</ResizableHeader>
-                <ResizableHeader colId="bill"       width={widths.bill}       minWidth={40} onResize={setWidth} align="center">Bill?</ResizableHeader>
-                <ResizableHeader colId="status"     width={widths.status}     minWidth={60} onResize={setWidth}>Status</ResizableHeader>
-                {editable && <th />}
-              </tr>
+              <DndContext
+                sensors={sortSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleHeaderDragEnd}
+              >
+                <SortableContext
+                  items={order.filter((id) => id !== "subby_cost" || showSubbyCost)}
+                  strategy={horizontalListSortingStrategy}
+                >
+                  <tr>
+                    <th />{/* tint */}
+                    {order.map((id) => {
+                      if (id === "subby_cost" && !showSubbyCost) return null;
+                      const def = COLUMN_BY_ID[id];
+                      if (!def) return null;
+                      return (
+                        <SortableResizableHeader
+                          key={id}
+                          colId={id}
+                          label={def.label}
+                          width={widths[id]}
+                          minWidth={def.minWidth ?? 30}
+                          align={def.align}
+                          onResize={setWidth}
+                        />
+                      );
+                    })}
+                    {editable && <th />}{/* delete */}
+                  </tr>
+                </SortableContext>
+              </DndContext>
             </thead>
             <tbody>
               {runs.map((r) => {
@@ -265,6 +299,7 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
                   ? "var(--mlc-blue, #0B2A6B)"
                   : "var(--mlc-red, #D81E2A)";
                 const locked = r.invoiceStatus === "sent" || r.invoiceStatus === "paid";
+                const editableNow = editable && !locked;
                 return (
                   <tr key={r.id} style={{ cursor: "default", background: tint }}>
                     <td
@@ -276,50 +311,21 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
                       }}
                       title={isBackload ? "Backload" : "Outbound"}
                     />
-                    <TextCell value={r.fromPostcode} editable={editable && !locked}
-                      onCommit={(v) => { patchLocal(r.id, { fromPostcode: v }); void persist(r.id, { fromPostcode: v }); }} />
-                    <TextCell value={r.toPostcode} editable={editable && !locked}
-                      onCommit={(v) => { patchLocal(r.id, { toPostcode: v }); void persist(r.id, { toPostcode: v }); }} />
-                    <DaysCell
-                      dayIndex={r.dayIndex ?? null}
-                      dayCount={r.dayCount ?? null}
-                      editable={editable && !locked}
-                      onCommit={(idx, cnt) => {
-                        patchLocal(r.id, { dayIndex: idx ?? undefined, dayCount: cnt ?? undefined });
-                        void persist(r.id, { dayIndex: idx, dayCount: cnt });
-                      }}
-                    />
-                    <TextCell value={r.factory ?? ""} editable={editable && !locked}
-                      onCommit={(v) => { patchLocal(r.id, { factory: v || undefined }); void persist(r.id, { factory: v || null }); }} />
-                    <TextCell value={r.bookingTime ?? ""} editable={editable && !locked}
-                      onCommit={(v) => { patchLocal(r.id, { bookingTime: v || undefined }); void persist(r.id, { bookingTime: v || null }); }} />
-                    <SelectCell value={r.vehicle} options={vehicles} editable={editable && !locked} allowFree mono
-                      onCommit={(v) => { patchLocal(r.id, { vehicle: v }); void persist(r.id, { vehicle: v }); }} />
-                    <TextCell value={r.subbyDriver ?? ""} editable={editable && !locked}
-                      onCommit={(v) => { patchLocal(r.id, { subbyDriver: v || undefined }); void persist(r.id, { subbyDriver: v || null }); }} />
-                    {showSubbyCost && (
-                      <NumberCell value={r.subbyCost ?? 0} editable={editable && !locked}
-                        onCommit={(n) => { patchLocal(r.id, { subbyCost: n }); void persist(r.id, { subbyCost: n }); }} />
-                    )}
-                    <SelectCell value={r.trailerNumber ?? ""} options={trailers} editable={editable && !locked} allowFree mono
-                      onCommit={(v) => { patchLocal(r.id, { trailerNumber: v || undefined }); void persist(r.id, { trailerNumber: v || null }); }} />
-                    <CheckCell checked={r.trailerDropped ?? false} disabled={!editable || locked}
-                      onChange={(v) => { patchLocal(r.id, { trailerDropped: v }); void persist(r.id, { trailerDropped: v }); }} />
-                    <TextCell value={r.loadRef ?? ""} editable={editable && !locked} mono
-                      onCommit={(v) => { patchLocal(r.id, { loadRef: v }); void persist(r.id, { loadRef: v }); }} />
-                    <SelectCell value={r.customer} options={customers} editable={editable && !locked} allowFree
-                      onCommit={(v) => { patchLocal(r.id, { customer: v }); void persist(r.id, { customer: v }); }} />
-                    <NumberCell value={r.revenue ?? 0} editable={editable && !locked}
-                      onCommit={(n) => { patchLocal(r.id, { revenue: n }); void persist(r.id, { revenue: n }); }} />
-                    <CheckCell checked={r.billable ?? false} disabled={!editable || locked}
-                      onChange={(v) => {
-                        patchLocal(r.id, { billable: v });
-                        void persist(r.id, {
-                          billable: v,
-                          invoiceStatus: v && (r.invoiceStatus ?? "open") === "open" ? "billable" : r.invoiceStatus,
-                        });
-                      }} />
-                    <td><StatusPill status={r.invoiceStatus ?? "open"} /></td>
+                    {order.map((id) => {
+                      if (id === "subby_cost" && !showSubbyCost) return null;
+                      return (
+                        <React.Fragment key={id}>
+                          {renderCell(id, r, {
+                            editable: editableNow,
+                            customers,
+                            trailers,
+                            vehicles,
+                            patchLocal,
+                            persist,
+                          })}
+                        </React.Fragment>
+                      );
+                    })}
                     {editable && (
                       <td className="right">
                         <button
@@ -339,7 +345,7 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
               {runs.length === 0 && (
                 <tr>
                   <td
-                    colSpan={(editable ? 17 : 16) - (showSubbyCost ? 0 : 1)}
+                    colSpan={1 + order.length - (showSubbyCost ? 0 : 1) + (editable ? 1 : 0)}
                     style={{ textAlign: "center", padding: 32, color: "var(--ink-500)", fontSize: 12.5 }}
                   >
                     No legs for {date}.{" "}
@@ -371,8 +377,8 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
             <button
               type="button"
               className="btn sm ghost"
-              onClick={resetColumnWidths}
-              title="Restore default column widths on this device"
+              onClick={resetColumnPrefs}
+              title="Restore default column order and widths on this device"
             >
               <Icon name="refresh" size={11} /> Reset columns
             </button>
@@ -421,38 +427,285 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
 export default PlannerGrid;
 
 /**
- * Sum the widths of every currently-visible column. Used as the table's
- * total width so the browser knows when to overflow into a horizontal
- * scrollbar (rather than crushing the content).
+ * Sum the widths of every currently-visible column (incl. tint stripe and
+ * the trailing Delete column when admin). Used as the table's total width
+ * so the browser knows when to overflow horizontally.
  */
 function visibleColumnsWidthSum(
   widths: Readonly<Record<string, number>>,
+  order: ReadonlyArray<string>,
   showSubbyCost: boolean,
   editable: boolean
 ): number {
   const TINT_STRIPE = 4;
+  const DELETE_COL = 70;
   let total = TINT_STRIPE;
-  for (const id of [
-    "collection",
-    "delivery",
-    "days",
-    "factory",
-    "booking",
-    "vehicle",
-    "subby_driver",
-    "trailer_number",
-    "trailer_dropped",
-    "reference",
-    "customer",
-    "revenue",
-    "bill",
-    "status",
-  ]) {
+  for (const id of order) {
+    if (id === "subby_cost" && !showSubbyCost) continue;
     total += widths[id] ?? 0;
   }
-  if (showSubbyCost) total += widths.subby_cost ?? 0;
-  if (editable) total += widths.delete ?? 0;
+  if (editable) total += DELETE_COL;
   return total;
+}
+
+/**
+ * A sortable + resizable header. Drag the body of the header to reorder;
+ * drag the right-edge handle to resize. The handle stops propagation on
+ * pointerdown so resize never accidentally starts a column drag.
+ */
+interface SortableResizableHeaderProps {
+  colId: string;
+  label: string;
+  width: number;
+  minWidth: number;
+  align?: "left" | "center" | "right";
+  onResize: (id: string, width: number) => void;
+}
+
+function SortableResizableHeader({
+  colId,
+  label,
+  width,
+  minWidth,
+  align = "left",
+  onResize,
+}: SortableResizableHeaderProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: colId });
+
+  // Resize-handle pointer state.
+  const startXRef = React.useRef(0);
+  const startWidthRef = React.useRef(width);
+  const draggingRef = React.useRef(false);
+
+  function handleResizePointerDown(e: React.PointerEvent<HTMLSpanElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    startXRef.current = e.clientX;
+    startWidthRef.current = width;
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+  function handleResizePointerMove(e: React.PointerEvent<HTMLSpanElement>) {
+    if (!draggingRef.current) return;
+    const delta = e.clientX - startXRef.current;
+    onResize(colId, Math.max(minWidth, startWidthRef.current + delta));
+  }
+  function handleResizePointerEnd(e: React.PointerEvent<HTMLSpanElement>) {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }
+
+  const textAlign = align === "right" ? "right" : align === "center" ? "center" : "left";
+
+  return (
+    <th
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      style={{
+        position: "relative",
+        textAlign,
+        paddingRight: 14,
+        cursor: isDragging ? "grabbing" : "grab",
+        opacity: isDragging ? 0.4 : 1,
+        transform: CSS.Transform.toString(transform),
+        transition,
+        touchAction: "none",
+        userSelect: "none",
+      }}
+      title={`Drag to reorder · drag the right edge to resize`}
+    >
+      {label}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={`Resize ${colId} column`}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerEnd}
+        onPointerCancel={handleResizePointerEnd}
+        className="col-resize-handle"
+        style={{
+          position: "absolute",
+          right: -1,
+          top: 0,
+          bottom: 0,
+          width: 12,
+          cursor: "col-resize",
+          touchAction: "none",
+          userSelect: "none",
+          zIndex: 2,
+        }}
+      />
+    </th>
+  );
+}
+
+/**
+ * Cell-renderer dispatch. Turns a column id + run row into a `<td>`.
+ * Defined as a top-level switch (not a hash of closures) so it doesn't
+ * re-create a Function per row per render.
+ */
+interface CellCtx {
+  editable: boolean;
+  customers: ReadonlyArray<string>;
+  trailers: ReadonlyArray<string>;
+  vehicles: ReadonlyArray<string>;
+  patchLocal: (id: string, fields: Partial<PlannedRun>) => void;
+  persist: (id: string, payload: Parameters<typeof updatePlannerCell>[1]) => Promise<void>;
+}
+
+function renderCell(id: string, r: PlannedRun, ctx: CellCtx): React.ReactNode {
+  const { editable, customers, trailers, vehicles, patchLocal, persist } = ctx;
+  switch (id) {
+    case "collection":
+      return (
+        <TextCell
+          value={r.fromPostcode}
+          editable={editable}
+          onCommit={(v) => { patchLocal(r.id, { fromPostcode: v }); void persist(r.id, { fromPostcode: v }); }}
+        />
+      );
+    case "delivery":
+      return (
+        <TextCell
+          value={r.toPostcode}
+          editable={editable}
+          onCommit={(v) => { patchLocal(r.id, { toPostcode: v }); void persist(r.id, { toPostcode: v }); }}
+        />
+      );
+    case "days":
+      return (
+        <DaysCell
+          dayIndex={r.dayIndex ?? null}
+          dayCount={r.dayCount ?? null}
+          editable={editable}
+          onCommit={(idx, cnt) => {
+            patchLocal(r.id, { dayIndex: idx ?? undefined, dayCount: cnt ?? undefined });
+            void persist(r.id, { dayIndex: idx, dayCount: cnt });
+          }}
+        />
+      );
+    case "factory":
+      return (
+        <TextCell
+          value={r.factory ?? ""}
+          editable={editable}
+          onCommit={(v) => { patchLocal(r.id, { factory: v || undefined }); void persist(r.id, { factory: v || null }); }}
+        />
+      );
+    case "booking":
+      return (
+        <TextCell
+          value={r.bookingTime ?? ""}
+          editable={editable}
+          onCommit={(v) => { patchLocal(r.id, { bookingTime: v || undefined }); void persist(r.id, { bookingTime: v || null }); }}
+        />
+      );
+    case "vehicle":
+      return (
+        <SelectCell
+          value={r.vehicle}
+          options={vehicles}
+          editable={editable}
+          allowFree
+          mono
+          onCommit={(v) => { patchLocal(r.id, { vehicle: v }); void persist(r.id, { vehicle: v }); }}
+        />
+      );
+    case "subby_driver":
+      return (
+        <TextCell
+          value={r.subbyDriver ?? ""}
+          editable={editable}
+          onCommit={(v) => { patchLocal(r.id, { subbyDriver: v || undefined }); void persist(r.id, { subbyDriver: v || null }); }}
+        />
+      );
+    case "subby_cost":
+      return (
+        <NumberCell
+          value={r.subbyCost ?? 0}
+          editable={editable}
+          onCommit={(n) => { patchLocal(r.id, { subbyCost: n }); void persist(r.id, { subbyCost: n }); }}
+        />
+      );
+    case "trailer_number":
+      return (
+        <SelectCell
+          value={r.trailerNumber ?? ""}
+          options={trailers}
+          editable={editable}
+          allowFree
+          mono
+          onCommit={(v) => { patchLocal(r.id, { trailerNumber: v || undefined }); void persist(r.id, { trailerNumber: v || null }); }}
+        />
+      );
+    case "trailer_dropped":
+      return (
+        <CheckCell
+          checked={r.trailerDropped ?? false}
+          disabled={!editable}
+          onChange={(v) => { patchLocal(r.id, { trailerDropped: v }); void persist(r.id, { trailerDropped: v }); }}
+        />
+      );
+    case "reference":
+      return (
+        <TextCell
+          value={r.loadRef ?? ""}
+          editable={editable}
+          mono
+          onCommit={(v) => { patchLocal(r.id, { loadRef: v }); void persist(r.id, { loadRef: v }); }}
+        />
+      );
+    case "customer":
+      return (
+        <SelectCell
+          value={r.customer}
+          options={customers}
+          editable={editable}
+          allowFree
+          onCommit={(v) => { patchLocal(r.id, { customer: v }); void persist(r.id, { customer: v }); }}
+        />
+      );
+    case "revenue":
+      return (
+        <NumberCell
+          value={r.revenue ?? 0}
+          editable={editable}
+          onCommit={(n) => { patchLocal(r.id, { revenue: n }); void persist(r.id, { revenue: n }); }}
+        />
+      );
+    case "bill":
+      return (
+        <CheckCell
+          checked={r.billable ?? false}
+          disabled={!editable}
+          onChange={(v) => {
+            patchLocal(r.id, { billable: v });
+            void persist(r.id, {
+              billable: v,
+              invoiceStatus: v && (r.invoiceStatus ?? "open") === "open" ? "billable" : r.invoiceStatus,
+            });
+          }}
+        />
+      );
+    case "status":
+      return <td><StatusPill status={r.invoiceStatus ?? "open"} /></td>;
+    default:
+      return <td />;
+  }
 }
 
 // ── Cell components ──────────────────────────────────────────────────

@@ -74,6 +74,20 @@ export async function updateRun(
   return { success: true };
 }
 
+/**
+ * Clear `run_order` (set to NULL) on every run on a given date. Used by
+ * the planner's "Reset row order" button to revert to the default sort.
+ */
+export async function clearRunOrdersForDate(date: string) {
+  const { supabase } = await getUser();
+  const { error } = await supabase
+    .from("runs")
+    .update({ run_order: null })
+    .eq("date", date);
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
 /** Bulk-update run_order for a set of runs (reordering within vehicle+date) */
 export async function updateRunOrders(
   orders: Array<{ id: string; runOrder: number }>

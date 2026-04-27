@@ -13,6 +13,8 @@ import {
   SortableContext,
   useSortable,
   horizontalListSortingStrategy,
+  verticalListSortingStrategy,
+  arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { PlannedRun } from "@/types/runs";
@@ -21,6 +23,7 @@ import {
   insertBlankPlannerRun,
   deletePlannerRun,
 } from "@/app/actions/planner";
+import { updateRunOrders, clearRunOrdersForDate } from "@/app/actions/runs";
 import Icon from "@/components/portal/Icon";
 import { useColumnPrefs, type ColumnDef } from "@/hooks/useColumnPrefs";
 
@@ -106,9 +109,9 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
     PLANNER_COLUMNS
   );
 
-  // dnd-kit sensors. The 8px distance threshold means short clicks on a
-  // header don't accidentally start a drag — gives the resize handle and
-  // any future click handlers a fair go.
+  // dnd-kit sensors. The 8px distance threshold means short clicks don't
+  // accidentally start a drag — important since the planner is full of
+  // editable inputs and inputs need to remain clickable.
   const sortSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
@@ -117,6 +120,57 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     reorder(String(active.id), String(over.id));
+  }
+
+  /**
+   * Drag-and-drop ROW reorder. When the user drops a row in a new spot:
+   *   1. Recompute the visible order via arrayMove.
+   *   2. Assign every row a sequential runOrder (0..N-1) so the new order
+   *      survives reload.
+   *   3. Persist all the runOrders to Supabase in one batch.
+   *
+   * After this, the customer-priority sort effectively becomes a tiebreaker
+   * (it never fires because every row has a unique runOrder). Use the
+   * "Reset row order" button to clear runOrders and revert to the priority
+   * sort.
+   */
+  async function handleRowDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    setRuns((prev) => {
+      const fromIdx = prev.findIndex((r) => r.id === active.id);
+      const toIdx = prev.findIndex((r) => r.id === over.id);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const reordered = arrayMove(prev, fromIdx, toIdx);
+      const stamped = reordered.map((r, i) => ({ ...r, runOrder: i }));
+      // Persist in the background — UI state is already updated optimistically.
+      void updateRunOrders(
+        stamped.map((r) => ({ id: r.id, runOrder: r.runOrder ?? 0 }))
+      );
+      onChanged?.(stamped);
+      return stamped;
+    });
+  }
+
+  /**
+   * Reset every row's runOrder to null on the server, so the day reverts
+   * to the default sort (customer-priority → vehicle → startTime).
+   */
+  async function handleResetRowOrder() {
+    if (!confirm("Reset row order? This clears the manual order and reverts to the customer-priority sort.")) return;
+    setBusy(true);
+    setError("");
+    const res = await clearRunOrdersForDate(date);
+    setBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setRuns((prev) => {
+      const cleared = prev.map((r) => ({ ...r, runOrder: null }));
+      onChanged?.(cleared);
+      return cleared;
+    });
   }
 
   const initialKey = useMemo(() => initialRuns.map((r) => r.id).join("|"), [initialRuns]);
@@ -289,60 +343,33 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
                 </SortableContext>
               </DndContext>
             </thead>
-            <tbody>
-              {runs.map((r) => {
-                const isBackload = r.runType === "backload";
-                const tint = isBackload
-                  ? "rgba(11, 42, 107, 0.04)"          // soft brand-blue for backloads
-                  : "rgba(216, 30, 42, 0.04)";        // soft brand-pink for outbound
-                const stripeColour = isBackload
-                  ? "var(--mlc-blue, #0B2A6B)"
-                  : "var(--mlc-red, #D81E2A)";
-                const locked = r.invoiceStatus === "sent" || r.invoiceStatus === "paid";
-                const editableNow = editable && !locked;
-                return (
-                  <tr key={r.id} style={{ cursor: "default", background: tint }}>
-                    <td
-                      style={{
-                        width: 4,
-                        padding: 0,
-                        background: stripeColour,
-                        borderBottom: "1px solid var(--line)",
-                      }}
-                      title={isBackload ? "Backload" : "Outbound"}
+            <DndContext
+              sensors={sortSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleRowDragEnd}
+            >
+              <SortableContext
+                items={runs.map((r) => r.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <tbody>
+                  {runs.map((r) => (
+                    <SortableRow
+                      key={r.id}
+                      run={r}
+                      editable={editable}
+                      busy={busy}
+                      order={order}
+                      showSubbyCost={showSubbyCost}
+                      customers={customers}
+                      trailers={trailers}
+                      vehicles={vehicles}
+                      patchLocal={patchLocal}
+                      persist={persist}
+                      onRemove={removeRow}
                     />
-                    {order.map((id) => {
-                      if (id === "subby_cost" && !showSubbyCost) return null;
-                      return (
-                        <React.Fragment key={id}>
-                          {renderCell(id, r, {
-                            editable: editableNow,
-                            customers,
-                            trailers,
-                            vehicles,
-                            patchLocal,
-                            persist,
-                          })}
-                        </React.Fragment>
-                      );
-                    })}
-                    {editable && (
-                      <td className="right">
-                        <button
-                          type="button"
-                          className="btn sm ghost"
-                          disabled={busy || locked}
-                          onClick={() => void removeRow(r.id)}
-                          style={{ color: "var(--err)" }}
-                        >
-                          <Icon name="x" size={11} /> Delete
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-              {runs.length === 0 && (
+                  ))}
+                  {runs.length === 0 && (
                 <tr>
                   <td
                     colSpan={1 + order.length - (showSubbyCost ? 0 : 1) + (editable ? 1 : 0)}
@@ -357,7 +384,9 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
                   </td>
                 </tr>
               )}
-            </tbody>
+                </tbody>
+              </SortableContext>
+            </DndContext>
           </table>
         </div>
         {editable && runs.length > 0 && (
@@ -373,6 +402,15 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
           >
             <button type="button" className="btn sm" disabled={busy} onClick={() => void addRow()}>
               <Icon name="plus" size={11} /> Add row
+            </button>
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={() => void handleResetRowOrder()}
+              disabled={busy}
+              title="Clear the manual row order and revert to customer-priority sort"
+            >
+              <Icon name="refresh" size={11} /> Reset row order
             </button>
             <button
               type="button"
@@ -446,6 +484,114 @@ function visibleColumnsWidthSum(
   }
   if (editable) total += DELETE_COL;
   return total;
+}
+
+/**
+ * A draggable row. The leftmost cell (the tint stripe, slightly widened
+ * to be a usable hit-box) is the drag handle — pressing and dragging it
+ * moves the row up or down. Inputs in the rest of the row remain
+ * clickable / editable as normal.
+ */
+interface SortableRowProps {
+  run: PlannedRun;
+  editable: boolean;
+  busy: boolean;
+  order: ReadonlyArray<string>;
+  showSubbyCost: boolean;
+  customers: ReadonlyArray<string>;
+  trailers: ReadonlyArray<string>;
+  vehicles: ReadonlyArray<string>;
+  patchLocal: (id: string, fields: Partial<PlannedRun>) => void;
+  persist: (id: string, payload: Parameters<typeof updatePlannerCell>[1]) => Promise<void>;
+  onRemove: (id: string) => Promise<void> | void;
+}
+
+function SortableRow({
+  run: r,
+  editable,
+  busy,
+  order,
+  showSubbyCost,
+  customers,
+  trailers,
+  vehicles,
+  patchLocal,
+  persist,
+  onRemove,
+}: SortableRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: r.id });
+
+  const isBackload = r.runType === "backload";
+  const tint = isBackload
+    ? "rgba(11, 42, 107, 0.04)"
+    : "rgba(216, 30, 42, 0.04)";
+  const stripeColour = isBackload
+    ? "var(--mlc-blue, #0B2A6B)"
+    : "var(--mlc-red, #D81E2A)";
+  const locked = r.invoiceStatus === "sent" || r.invoiceStatus === "paid";
+  const editableNow = editable && !locked;
+
+  return (
+    <tr
+      ref={setNodeRef}
+      {...attributes}
+      style={{
+        cursor: "default",
+        background: isDragging ? "var(--surface-alt)" : tint,
+        opacity: isDragging ? 0.7 : 1,
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <td
+        {...listeners}
+        title={`${isBackload ? "Backload" : "Outbound"} — drag to reorder`}
+        style={{
+          width: 4,
+          padding: 0,
+          background: stripeColour,
+          borderBottom: "1px solid var(--line)",
+          cursor: editable ? (isDragging ? "grabbing" : "grab") : "default",
+          touchAction: "none",
+        }}
+      />
+      {order.map((id) => {
+        if (id === "subby_cost" && !showSubbyCost) return null;
+        return (
+          <React.Fragment key={id}>
+            {renderCell(id, r, {
+              editable: editableNow,
+              customers,
+              trailers,
+              vehicles,
+              patchLocal,
+              persist,
+            })}
+          </React.Fragment>
+        );
+      })}
+      {editable && (
+        <td className="right">
+          <button
+            type="button"
+            className="btn sm ghost"
+            disabled={busy || locked}
+            onClick={() => void onRemove(r.id)}
+            style={{ color: "var(--err)" }}
+          >
+            <Icon name="x" size={11} /> Delete
+          </button>
+        </td>
+      )}
+    </tr>
+  );
 }
 
 /**

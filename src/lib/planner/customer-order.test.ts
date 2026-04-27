@@ -127,9 +127,25 @@ describe("sortRunsForPlanner", () => {
 });
 
 describe("compareRunsForPlanner", () => {
-  it("priority customer wins regardless of vehicle / runOrder", () => {
+  it("manual runOrder takes precedence over customer priority", () => {
+    // STOBART is non-priority but has runOrder=1; MONTPELLIER has runOrder=99.
+    // After the change, the row the operator dragged (lower runOrder) wins.
     const a = run({ customer: "STOBART", vehicle: "AAA", runOrder: 1 });
     const b = run({ customer: "MONTPELLIER", vehicle: "ZZZ", runOrder: 99 });
+    expect(compareRunsForPlanner(a, b)).toBeLessThan(0);
+  });
+
+  it("customer priority is the tiebreaker when neither row has runOrder", () => {
+    const a = run({ customer: "STOBART" });
+    const b = run({ customer: "MONTPELLIER" });
+    // No runOrder set on either → both treated as +Infinity → fall through to
+    // customer priority, where MONTPELLIER (bucket 2) beats STOBART (bucket 3).
     expect(compareRunsForPlanner(b, a)).toBeLessThan(0);
+  });
+
+  it("rows with runOrder come before rows without", () => {
+    const a = run({ customer: "ASHWOOD", runOrder: 0 });
+    const b = run({ customer: "CONSOLID8" }); // no runOrder
+    expect(compareRunsForPlanner(a, b)).toBeLessThan(0);
   });
 });

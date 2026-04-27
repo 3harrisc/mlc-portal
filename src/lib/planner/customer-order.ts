@@ -53,18 +53,27 @@ export function compareByCustomer(a: string, b: string): number {
 }
 
 /**
- * Stable comparator for two PlannedRuns: customer-priority first, then
- * vehicle, then runOrder, then startTime. Suitable for `Array.sort()`.
+ * Stable comparator for two PlannedRuns. Order:
+ *
+ *   1. `runOrder` (manual drag-reorder) — takes precedence so a row the
+ *      operator deliberately dragged stays where they put it.
+ *   2. Customer priority — CONSOLID8 → ASHWOOD → MONTPELLIER → others alpha.
+ *   3. Vehicle alphabetical.
+ *   4. startTime.
+ *
+ * Rows with no `runOrder` (the default) sort to the bottom of the runOrder
+ * bucket, then fall through to customer priority — so a fresh day with no
+ * manual ordering lands the way the operator expects (CONSOLID8 first).
  */
 export function compareRunsForPlanner(a: PlannedRun, b: PlannedRun): number {
+  const ao = a.runOrder ?? Number.POSITIVE_INFINITY;
+  const bo = b.runOrder ?? Number.POSITIVE_INFINITY;
+  if (ao !== bo) return ao - bo;
   const c = compareByCustomer(a.customer ?? "", b.customer ?? "");
   if (c !== 0) return c;
   const av = (a.vehicle ?? "").toUpperCase();
   const bv = (b.vehicle ?? "").toUpperCase();
   if (av !== bv) return av.localeCompare(bv);
-  const ao = a.runOrder ?? Number.POSITIVE_INFINITY;
-  const bo = b.runOrder ?? Number.POSITIVE_INFINITY;
-  if (ao !== bo) return ao - bo;
   return (a.startTime ?? "").localeCompare(b.startTime ?? "");
 }
 

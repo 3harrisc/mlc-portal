@@ -37,10 +37,11 @@ const REQUIRED_FIELDS: Array<keyof PortalBookingInput> = [
 ];
 
 /**
- * Insert a customer-portal booking as a `runs` row with no vehicle assigned.
- * Dispatch picks it up via the same flow they use for the email-to-run
- * pipeline. The booking is tagged in `raw_text` so dispatch can see at a
- * glance it came from the portal.
+ * Insert a customer-portal booking into the `loads` table with no vehicle
+ * assigned. The booking is tagged in `raw_text` so the operator can see at a
+ * glance it came from the portal. The dispatch planner (`runs`) is left
+ * untouched — once dispatch confirms a load, they create a corresponding
+ * planner row themselves.
  */
 export async function createPortalBooking(
   input: PortalBookingInput,
@@ -99,7 +100,7 @@ export async function createPortalBooking(
     collection_date: input.pickupDate || null,
   };
 
-  const { error } = await supabase.from("runs").insert(row);
+  const { error } = await supabase.from("loads").insert(row);
   if (error) return { error: error.message };
 
   // Side-effects: customer profile + confirmation email. We never fail the

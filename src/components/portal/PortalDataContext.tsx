@@ -6,7 +6,7 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { useScopedRuns } from "@/hooks/useScopedRuns";
+import { useScopedLoads } from "@/hooks/useScopedLoads";
 import { todayISO } from "@/lib/time-utils";
 import type { PlannedRun } from "@/types/runs";
 import { deriveStatus } from "@/lib/portal/loads";
@@ -43,27 +43,17 @@ const PortalDataContext = createContext<PortalDataValue>({
 });
 
 /**
- * Drops historical/imported rows from the customer-facing loads view.
+ * Provides scoped loads + derived counts to the portal shell.
  *
- * Legs imported from the legacy Excel planner all carry IDs prefixed with
- * `legacy-`. They are useful for invoicing reconciliation but not for the
- * customer tracking UI — there's no live vehicle, no reference to track, etc.
- */
-function isLiveRun(r: PlannedRun): boolean {
-  return !r.id.startsWith("legacy-");
-}
-
-/**
- * Provides scoped runs + derived counts to the portal shell.
- * Single fetch per page; sidebar, dashboard, loads, tracking, etc. all consume.
+ * Single fetch per page; sidebar, dashboard, /portal/loads, tracking, etc. all
+ * consume. Reads the new `loads` table (separate from dispatch `runs`) so the
+ * customer-facing UI is fully isolated from planner / invoicing rows.
  */
 export function PortalDataProvider({ children }: { children: ReactNode }) {
-  const { runs: allRuns, loading, refetch } = useScopedRuns();
+  const { loads: runs, loading, refetch } = useScopedLoads();
   const today = todayISO();
 
   const value = useMemo<PortalDataValue>(() => {
-    // Customers track live runs only — historical Excel imports are out of scope.
-    const runs = allRuns.filter(isLiveRun);
     const enriched: EnrichedRun[] = runs.map((r) => ({
       run: r,
       status: deriveStatus(r, today),
@@ -93,7 +83,7 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       loading,
       refetch,
     };
-  }, [allRuns, loading, today, refetch]);
+  }, [runs, loading, today, refetch]);
 
   return (
     <PortalDataContext.Provider value={value}>

@@ -15,7 +15,7 @@ import { useVehiclePositions } from "@/hooks/useVehiclePositions";
 import { normVehicle } from "@/lib/webfleet";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteRun } from "@/app/actions/runs";
+import { deleteLoad } from "@/app/actions/loads";
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import PortalMap, {
@@ -47,7 +47,7 @@ export default function LoadDetailPage() {
     let cancelled = false;
     void (async () => {
       const { data, error } = await supabase
-        .from("runs")
+        .from("loads")
         .select("*")
         .eq("id", id)
         .maybeSingle();
@@ -133,7 +133,7 @@ function LoadDetailView({
     const label = run.jobNumber || run.id;
     if (!window.confirm(`Delete load ${label}? This cannot be undone.`)) return;
     startDelete(async () => {
-      const result = await deleteRun(run.id);
+      const result = await deleteLoad(run.id);
       if (result.error) {
         showToast(`Couldn't delete: ${result.error}`, "err");
         return;

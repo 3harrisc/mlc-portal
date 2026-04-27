@@ -25,7 +25,7 @@ async function getAuthedSupabase() {
 async function ensurePermission(runId: string) {
   const { supabase, user } = await getAuthedSupabase();
   const [{ data: run }, { data: profile }] = await Promise.all([
-    supabase.from("runs").select("customer").eq("id", runId).maybeSingle(),
+    supabase.from("loads").select("customer").eq("id", runId).maybeSingle(),
     supabase
       .from("profiles")
       .select("role, allowed_customers")
@@ -59,7 +59,7 @@ export async function getPortalShareToken(
   try {
     const supabase = await ensurePermission(runId);
     const { data, error } = await supabase
-      .from("runs")
+      .from("loads")
       .select("share_token, share_token_created_at")
       .eq("id", runId)
       .maybeSingle();
@@ -87,7 +87,7 @@ export async function generatePortalShareToken(
     const token = makeToken();
     const createdAt = new Date().toISOString();
     const { error } = await supabase
-      .from("runs")
+      .from("loads")
       .update({
         share_token: token,
         share_token_created_at: createdAt,
@@ -110,7 +110,7 @@ export async function revokePortalShareToken(
   try {
     const supabase = await ensurePermission(runId);
     const { error } = await supabase
-      .from("runs")
+      .from("loads")
       .update({ share_token: null, share_token_created_at: null })
       .eq("id", runId);
     if (error) return { error: error.message };

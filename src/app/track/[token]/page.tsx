@@ -27,11 +27,26 @@ export default async function PublicTrackPage({ params }: PageProps) {
   const sb = getSupabaseAdmin();
 
   // Token lookup uses the admin client so the public RLS posture is unchanged.
-  const { data: row } = await sb
-    .from("runs")
-    .select("*")
-    .eq("share_token", token)
-    .maybeSingle();
+  // After the loads/runs split (migration 013) all NEW share tokens live on
+  // `loads`. We still check `runs` as a fallback so any tokens that were
+  // already issued before the split keep working.
+  let row: Record<string, unknown> | null = null;
+  {
+    const r = await sb
+      .from("loads")
+      .select("*")
+      .eq("share_token", token)
+      .maybeSingle();
+    row = r.data ?? null;
+  }
+  if (!row) {
+    const r = await sb
+      .from("runs")
+      .select("*")
+      .eq("share_token", token)
+      .maybeSingle();
+    row = r.data ?? null;
+  }
   if (!row) notFound();
 
   const run = rowToRun(row);

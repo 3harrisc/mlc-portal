@@ -7,7 +7,7 @@ import { useNicknames } from "@/hooks/useNicknames";
 import { usePortalData } from "@/components/portal/PortalDataContext";
 import { useAuth } from "@/components/AuthProvider";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteRuns, setRunVehicle } from "@/app/actions/runs";
+import { deleteLoads, setLoadVehicle } from "@/app/actions/loads";
 import { listVehicles } from "@/app/actions/fleet";
 import Icon from "@/components/portal/Icon";
 import StatusPill, {
@@ -83,7 +83,7 @@ export default function LoadsPage() {
   async function handleSetVehicle(runId: string, raw: string) {
     const trimmed = raw.trim().toUpperCase();
     setVehicleOverrides((curr) => ({ ...curr, [runId]: trimmed }));
-    const res = await setRunVehicle(runId, trimmed);
+    const res = await setLoadVehicle(runId, trimmed);
     if (res.error) {
       // Roll back the optimistic override on failure.
       setVehicleOverrides((curr) => {
@@ -101,7 +101,7 @@ export default function LoadsPage() {
     setDeleting(true);
     setDeleteError("");
     const ids = Array.from(selected);
-    const res = await deleteRuns(ids);
+    const res = await deleteLoads(ids);
     setDeleting(false);
     if (res.error) {
       setDeleteError(res.error);

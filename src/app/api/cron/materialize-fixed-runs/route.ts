@@ -70,12 +70,14 @@ export async function GET(req: Request) {
       customer: spec.customer,
       vehicle: "",
       from_postcode: spec.fromPostcode,
-      to_postcode: spec.toPostcode,
+      // Delivery cell shows the friendly label; raw postcode lives in
+      // raw_text. See materializeFixedRuns for the rationale.
+      to_postcode: spec.destinationLabel,
       return_to_base: spec.returnToBase,
       start_time: spec.startTime,
       service_mins: spec.serviceMins,
       include_breaks: spec.includeBreaks,
-      raw_text: spec.toPostcode,
+      raw_text: spec.destinationPostcode,
       completed_stop_indexes: [],
       completed_meta: {},
       progress: {
@@ -91,7 +93,7 @@ export async function GET(req: Request) {
       run_order: null,
       collection_time: null,
       collection_date: null,
-      factory: spec.factory,
+      factory: null,
       booking_time: null,
       subby_driver: null,
       subby_cost: null,

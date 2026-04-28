@@ -367,12 +367,16 @@ export async function materializeFixedRuns(
       customer: spec.customer,
       vehicle: "",
       from_postcode: spec.fromPostcode,
-      to_postcode: spec.toPostcode,
+      // Delivery cell on the planner shows the operator-friendly label
+      // ("Tamworth 1", "Portbury", …) rather than the raw postcode.
+      to_postcode: spec.destinationLabel,
       return_to_base: spec.returnToBase,
       start_time: spec.startTime,
       service_mins: spec.serviceMins,
       include_breaks: spec.includeBreaks,
-      raw_text: spec.toPostcode,
+      // Real postcode lives in raw_text so chained-start ETA, cron progress
+      // tracking, and /track all keep working.
+      raw_text: spec.destinationPostcode,
       completed_stop_indexes: [],
       completed_meta: {},
       progress: {
@@ -386,7 +390,9 @@ export async function materializeFixedRuns(
       run_order: null,
       collection_time: null,
       collection_date: null,
-      factory: spec.factory,
+      // Factory column intentionally blank — operator fills it in if/when
+      // the destination factory needs to be tagged separately.
+      factory: null,
       booking_time: null,
       subby_driver: null,
       subby_cost: null,

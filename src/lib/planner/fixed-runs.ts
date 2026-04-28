@@ -22,12 +22,24 @@ export interface FixedRunSpec {
   slug: string;
   /** Customer name, exactly as it should appear on the planner row. */
   customer: string;
-  /** Factory label shown in the planner Factory column. */
-  factory: string;
-  /** Driver origin (Newark base for current 4). */
+  /**
+   * Driver origin (Newark base for current 4). Used for the From column and
+   * as the start-of-day postcode for chain calculations.
+   */
   fromPostcode: string;
-  /** Destination postcode. */
-  toPostcode: string;
+  /**
+   * Human-readable label for the planner's Delivery column (e.g. "Tamworth
+   * 1", "Portbury"). The operator wants the depot/factory name here rather
+   * than the raw postcode. Stored in `to_postcode` because that's what the
+   * Delivery cell displays.
+   */
+  destinationLabel: string;
+  /**
+   * Actual postcode of the delivery, kept in `raw_text` so chained-start
+   * travel time, cron progress tracking, and the public /track view still
+   * have a real postcode to geocode.
+   */
+  destinationPostcode: string;
   /** Default planner start time. */
   startTime: string;
   /** Service minutes per stop. */
@@ -48,9 +60,9 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-tamworth-1",
     customer: "Consolid8",
-    factory: "Tamworth 1",
     fromPostcode: "NG22 8TX", // Newark
-    toPostcode: "B78 3HJ",    // Tamworth
+    destinationLabel: "Tamworth 1",
+    destinationPostcode: "B78 3HJ",
     startTime: "06:00",
     serviceMins: 60,
     includeBreaks: true,
@@ -62,9 +74,9 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-tamworth-3",
     customer: "Consolid8",
-    factory: "Tamworth 3",
     fromPostcode: "NG22 8TX",
-    toPostcode: "B78 3HJ",
+    destinationLabel: "Tamworth 3",
+    destinationPostcode: "B78 3HJ",
     startTime: "06:00",
     serviceMins: 60,
     includeBreaks: true,
@@ -76,9 +88,9 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-portbury",
     customer: "Consolid8",
-    factory: "Portbury",
     fromPostcode: "NG22 8TX",
-    toPostcode: "BS20 7XN", // Portbury Dock
+    destinationLabel: "Portbury",
+    destinationPostcode: "BS20 7XN", // Portbury Dock
     startTime: "06:00",
     serviceMins: 60,
     includeBreaks: true,
@@ -90,9 +102,9 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-prem-park-3",
     customer: "Consolid8",
-    factory: "Prem Park 3",
     fromPostcode: "NG22 8TX",
-    toPostcode: "NW10 7NZ", // Premier Park, NW London
+    destinationLabel: "Prem Park 3",
+    destinationPostcode: "NW10 7NZ", // Premier Park, NW London
     startTime: "06:00",
     serviceMins: 60,
     includeBreaks: true,

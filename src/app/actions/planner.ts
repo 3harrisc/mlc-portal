@@ -343,21 +343,26 @@ export async function materializeFixedRuns(
   if (!isWeekday(date)) return { inserted: 0 };
   const { supabase, user } = await getUser();
 
-  // Look up which slugs already have a row for this date so we only insert
-  // the missing ones. Cheap because of the indexed PK lookup with .in().
-  const candidateIds = FIXED_WEEKDAY_RUNS.map((spec) =>
-    fixedRunId(spec.slug, date),
+  // Decide which specs to materialise by consulting the
+  // `fixed_run_materializations` ledger — once a (slug, date) pair has been
+  // recorded there, we treat it as "already handled" for the day even if
+  // the dispatcher has since deleted the underlying row. That's what stops
+  // deleted fixed runs from reappearing on the next page-load.
+  const slugs = FIXED_WEEKDAY_RUNS.map((spec) => spec.slug);
+  const { data: ledger, error: ledgerErr } = await supabase
+    .from("fixed_run_materializations")
+    .select("slug")
+    .eq("date", date)
+    .in("slug", slugs);
+  if (ledgerErr) return { error: ledgerErr.message };
+  const alreadyMaterialised = new Set(
+    (ledger ?? []).map((r) => r.slug as string),
   );
-  const { data: existing, error: fetchErr } = await supabase
-    .from("runs")
-    .select("id")
-    .in("id", candidateIds);
-  if (fetchErr) return { error: fetchErr.message };
-  const existingIds = new Set((existing ?? []).map((r) => r.id as string));
 
-  const toInsert = FIXED_WEEKDAY_RUNS.filter(
-    (spec) => !existingIds.has(fixedRunId(spec.slug, date)),
-  ).map((spec) => {
+  const toMaterialise = FIXED_WEEKDAY_RUNS.filter(
+    (spec) => !alreadyMaterialised.has(spec.slug),
+  );
+  const toInsert = toMaterialise.map((spec) => {
     const id = fixedRunId(spec.slug, date);
     return {
       id,
@@ -418,6 +423,17 @@ export async function materializeFixedRuns(
     .from("runs")
     .upsert(toInsert, { onConflict: "id", ignoreDuplicates: true });
   if (insErr) return { error: insErr.message };
+
+  // Record the ledger entries so subsequent calls skip these specs even if
+  // the dispatcher deletes the rows. ignoreDuplicates handles the
+  // cron/page-load race window the same way as the runs upsert above.
+  const { error: ledgerInsErr } = await supabase
+    .from("fixed_run_materializations")
+    .upsert(
+      toMaterialise.map((spec) => ({ slug: spec.slug, date })),
+      { onConflict: "slug,date", ignoreDuplicates: true },
+    );
+  if (ledgerInsErr) return { error: ledgerInsErr.message };
 
   return { inserted: toInsert.length };
 }

@@ -60,7 +60,7 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-tamworth-1",
     customer: "Consolid8",
-    fromPostcode: "NG22 8TX", // Newark
+    fromPostcode: "Newark",
     destinationLabel: "Tamworth 1",
     destinationPostcode: "B78 3HJ",
     startTime: "06:00",
@@ -74,7 +74,7 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-tamworth-3",
     customer: "Consolid8",
-    fromPostcode: "NG22 8TX",
+    fromPostcode: "Newark",
     destinationLabel: "Tamworth 3",
     destinationPostcode: "B78 3HJ",
     startTime: "06:00",
@@ -88,7 +88,7 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-portbury",
     customer: "Consolid8",
-    fromPostcode: "NG22 8TX",
+    fromPostcode: "Newark",
     destinationLabel: "Portbury",
     destinationPostcode: "BS20 7XN", // Portbury Dock
     startTime: "06:00",
@@ -102,7 +102,7 @@ export const FIXED_WEEKDAY_RUNS: ReadonlyArray<FixedRunSpec> = [
   {
     slug: "consolid8-prem-park-3",
     customer: "Consolid8",
-    fromPostcode: "NG22 8TX",
+    fromPostcode: "Newark",
     destinationLabel: "Prem Park 3",
     destinationPostcode: "NW10 7NZ", // Premier Park, NW London
     startTime: "06:00",

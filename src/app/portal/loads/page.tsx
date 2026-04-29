@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { PlannedRun } from "@/types/runs";
 import { useNicknames } from "@/hooks/useNicknames";
 import { usePostcodeCoords } from "@/hooks/usePostcodeCoords";
@@ -511,20 +511,63 @@ export default function LoadsPage() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((row) => (
-                <LoadTableRow
-                  key={row.run.id}
-                  row={row}
-                  selected={selected.has(row.run.id)}
-                  onToggle={toggleSel}
-                  isAdmin={isAdmin}
-                  fleetVehicles={fleetVehicles}
-                  vehicleOverride={vehicleOverrides[row.run.id]}
-                  onSetVehicle={handleSetVehicle}
-                  onCopyToPlanner={handleCopyToPlanner}
-                  copying={copying.has(row.run.id)}
-                />
-              ))}
+              {visible.map((row, idx) => {
+                // Insert a date separator whenever we transition to a new
+                // calendar day, but only when the user is sorting by date —
+                // any other sort would scatter dates and the separators
+                // would be noise rather than signal. The current logic
+                // mirrors how the dispatch planner groups by week.
+                const prev = idx > 0 ? visible[idx - 1] : null;
+                const showSeparator =
+                  sortKey === "date" &&
+                  (!prev || prev.run.date !== row.run.date);
+                const sameDateCount = visible.filter(
+                  (r) => r.run.date === row.run.date,
+                ).length;
+                return (
+                  <Fragment key={row.run.id}>
+                    {showSeparator && (
+                      <tr className="date-separator">
+                        <td colSpan={11}>
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "10px 12px",
+                              background: "var(--surface-alt)",
+                              borderTop: "1px solid var(--line)",
+                              borderBottom: "1px solid var(--line)",
+                              fontSize: 11.5,
+                              fontWeight: 600,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.05em",
+                              color: "var(--ink-500)",
+                            }}
+                          >
+                            <span>{longDateLabel(row.run.date)}</span>
+                            <span style={{ opacity: 0.65, fontWeight: 400 }}>
+                              · {sameDateCount} load
+                              {sameDateCount === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    <LoadTableRow
+                      row={row}
+                      selected={selected.has(row.run.id)}
+                      onToggle={toggleSel}
+                      isAdmin={isAdmin}
+                      fleetVehicles={fleetVehicles}
+                      vehicleOverride={vehicleOverrides[row.run.id]}
+                      onSetVehicle={handleSetVehicle}
+                      onCopyToPlanner={handleCopyToPlanner}
+                      copying={copying.has(row.run.id)}
+                    />
+                  </Fragment>
+                );
+              })}
               {!loading && visible.length === 0 && (
                 <tr>
                   <td
@@ -601,6 +644,38 @@ export default function LoadsPage() {
       </div>
     </>
   );
+}
+
+/** "Tue 28 Apr 2026" — used by the sticky date separators in the loads table. */
+function longDateLabel(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** Colour stripe driving the accent on the leftmost cell of each row. */
+function statusColor(status: LoadStatus): string {
+  switch (status) {
+    case "in-transit":
+      return "var(--mlc-blue)";
+    case "loading":
+      return "var(--info)";
+    case "delivered":
+      return "var(--ok)";
+    case "delayed":
+      return "var(--warn)";
+    case "exception":
+      return "var(--err)";
+    case "scheduled":
+    default:
+      return "var(--ink-300)";
+  }
 }
 
 function sortValue(row: LoadRow, key: SortKey): string | number {
@@ -680,6 +755,12 @@ function LoadTableRow({
     ? (progress.completed / progress.total) * 100
     : 0;
 
+  // 3px coloured stripe on the left side of the checkbox cell so the row's
+  // status reads at-a-glance from the table edge — same visual idea as
+  // GitHub's PR/issue list. Pure CSS box-shadow rather than a wider border
+  // because borders nudge cell widths inconsistently across browsers.
+  const accentShadow = `inset 3px 0 0 0 ${statusColor(status)}`;
+
   return (
     <tr className={selected ? "selected" : ""}>
       <td
@@ -687,6 +768,7 @@ function LoadTableRow({
           e.stopPropagation();
           onToggle(run.id);
         }}
+        style={{ boxShadow: accentShadow, paddingLeft: 12 }}
       >
         <span className={`cb ${selected ? "checked" : ""}`} role="checkbox" aria-checked={selected}>
           {selected && <Icon name="check" size={9} strokeWidth={3} />}

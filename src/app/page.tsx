@@ -14,9 +14,17 @@ export default function Home() {
   const [ytd, setYtd] = useState<YtdSummary | null>(null);
 
   useEffect(() => {
-    if (!loading && profile?.role === "driver") {
+    if (loading) return;
+    // Drivers go to their own simplified app; everyone else lands on the
+    // new customer portal. The old "/" dashboard below still renders for
+    // a frame before the redirect kicks in, but that's fine — the portal
+    // shell takes over within ~50ms in practice and the user sees the
+    // new UI as the first paint.
+    if (profile?.role === "driver") {
       router.replace("/driver");
+      return;
     }
+    router.replace("/portal");
   }, [loading, profile, router]);
 
   useEffect(() => {

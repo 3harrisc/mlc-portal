@@ -19,6 +19,7 @@
 import type { PlannedRun } from "@/types/runs";
 import { computeChainedStarts, estimateFinishTime } from "@/lib/runDuration";
 import { type LngLat } from "@/lib/geo-utils";
+import { displayEta } from "./loads";
 
 export interface ChainedInfo {
   chainedStartTime: string;
@@ -71,11 +72,9 @@ export function chainedEta(
   run: PlannedRun,
   chained: ChainedInfo | undefined,
 ): string {
-  if (!chained) {
-    return estimateFinishTime(run).finishTime || "—";
-  }
-  // Build a transient run with the chained start so estimateFinishTime
-  // does the right thing without needing a new code path.
-  const projected: PlannedRun = { ...run, startTime: chained.chainedStartTime };
-  return estimateFinishTime(projected).finishTime || "—";
+  const computed = chained
+    ? estimateFinishTime({ ...run, startTime: chained.chainedStartTime })
+        .finishTime
+    : estimateFinishTime(run).finishTime;
+  return displayEta(run, computed || "");
 }

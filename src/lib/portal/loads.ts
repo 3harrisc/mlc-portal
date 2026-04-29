@@ -47,7 +47,40 @@ export function progressTuple(run: PlannedRun): { completed: number; total: numb
  * The detail page should use buildEtaChain() for a Mapbox-backed answer.
  */
 export function quickEta(run: PlannedRun): string {
-  return estimateFinishTime(run).finishTime || "—";
+  return displayEta(run, estimateFinishTime(run).finishTime);
+}
+
+/**
+ * Apply the booked-time floor to a computed ETA.
+ *
+ * Why
+ * ---
+ * The dispatcher books a customer slot (bookingTime, e.g. "08:00") and
+ * doesn't want the customer-facing ETA to read earlier than that even if
+ * the truck-distance maths says we'd theoretically arrive at 07:42 — the
+ * driver isn't going to turn up early. The ETA only "moves" once the
+ * computed time slips past the booking and we're genuinely going to be
+ * late. Equivalent to:  ETA = max(bookingTime, computedEta).
+ *
+ * Falls back to the computed value (or "—") whenever the run has no
+ * bookingTime, the booking is malformed, or the computed value is empty.
+ */
+export function displayEta(run: PlannedRun, computed: string): string {
+  const eta = computed || "";
+  const booked = (run.bookingTime ?? "").trim();
+  if (!booked) return eta || "—";
+  if (!eta) return booked;
+  // Compare as HH:MM minutes-since-midnight; non-numeric values fall
+  // through and we treat them as missing.
+  const toMin = (hhmm: string): number | null => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+    if (!m) return null;
+    return Number(m[1]) * 60 + Number(m[2]);
+  };
+  const a = toMin(booked);
+  const b = toMin(eta);
+  if (a == null || b == null) return eta || booked || "—";
+  return a >= b ? booked : eta;
 }
 
 /** "25 Apr" — short British date for table cells. */

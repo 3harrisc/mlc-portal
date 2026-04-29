@@ -17,6 +17,7 @@ import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
 import { deleteLoad, setLoadVehicle } from "@/app/actions/loads";
 import { listVehicles } from "@/app/actions/fleet";
+import { buildRoutePlan, type RoutePlan, type PlanLeg } from "@/lib/portal/route-plan";
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import PortalMap, {
@@ -44,6 +45,10 @@ export default function LoadDetailPage() {
   // compute chained start times for stacked customer loads (matches what the
   // dispatch planner does for stacked runs).
   const [siblings, setSiblings] = useState<PlannedRun[]>([]);
+  // Customer's depot postcode. Used by buildRoutePlan to decide whether the
+  // load's fromPostcode IS the collection point (Ashwood-style multi-drop)
+  // or just a synthetic copy of it on a return-to-base row.
+  const [customerBase, setCustomerBase] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -65,6 +70,18 @@ export default function LoadDetailPage() {
       }
       const detail = rowToRun(data);
       setRun(detail);
+
+      // Look up the customer's base_postcode. Customer names in the runs
+      // table are case-sensitive labels but the customers table is keyed
+      // on `name`, so we use ilike for tolerant matching.
+      if (detail.customer) {
+        const { data: cust } = await supabase
+          .from("customers")
+          .select("base_postcode")
+          .ilike("name", detail.customer)
+          .maybeSingle();
+        if (!cancelled) setCustomerBase(cust?.base_postcode ?? null);
+      }
 
       // Fetch siblings only when the load has a vehicle assigned — without a
       // vehicle there's nothing to chain. Includes the current load so the
@@ -124,6 +141,7 @@ export default function LoadDetailPage() {
       run={run}
       siblings={siblings}
       nicknames={nicknames}
+      customerBase={customerBase}
       onRunChange={setRun}
       onSiblingsChange={setSiblings}
     />
@@ -146,12 +164,14 @@ function LoadDetailView({
   run,
   siblings,
   nicknames,
+  customerBase,
   onRunChange,
   onSiblingsChange,
 }: {
   run: PlannedRun;
   siblings: PlannedRun[];
   nicknames: Record<string, string>;
+  customerBase: string | null;
   onRunChange: (run: PlannedRun) => void;
   onSiblingsChange: (siblings: PlannedRun[]) => void;
 }) {
@@ -232,18 +252,28 @@ function LoadDetailView({
   const today = todayISO();
   const status = deriveStatus(run, today);
   const stops = useMemo(() => parseStops(run.rawText), [run.rawText]);
+  // Canonical "what does this load look like on the road" plan. Folds in
+  // the customer's base postcode so Ashwood-style multi-drop runs render
+  // their depot as the collection point and every parsed stop as a drop.
+  const plan: RoutePlan = useMemo(
+    () => buildRoutePlan(run, customerBase),
+    [run, customerBase],
+  );
   const completedIdx = useMemo(() => {
     const fromCompleted = new Set(run.completedStopIndexes ?? []);
     (run.progress?.completedIdx ?? []).forEach((i) => fromCompleted.add(i));
     return fromCompleted;
   }, [run.completedStopIndexes, run.progress]);
   const completedCount = completedIdx.size;
-  const total = stops.length;
-  // Combined postcode list: this load's stops (for the map pins) + every
-  // sibling's from / last-stop postcodes (so chained-start travel time uses
-  // real haversine distance instead of the 30-minute fallback).
+  // Combined postcode list: every leg in this load's plan (so the map can
+  // pin the depot, every drop, and the return-to-base leg) + every sibling's
+  // from / last-stop postcodes (so chained-start travel time uses real
+  // haversine distance rather than the 30-minute fallback).
   const allChainPostcodes = useMemo(() => {
-    const set = new Set<string>(stops);
+    const set = new Set<string>();
+    for (const leg of plan.legs) {
+      if (leg.postcode) set.add(leg.postcode);
+    }
     const chainable = siblings.length > 0 ? siblings : [run];
     for (const r of chainable) {
       if (r.fromPostcode) set.add(r.fromPostcode);
@@ -251,7 +281,7 @@ function LoadDetailView({
       if (sibStops.length) set.add(sibStops[sibStops.length - 1]);
     }
     return Array.from(set);
-  }, [stops, siblings, run]);
+  }, [plan, siblings, run]);
   const { coords } = usePostcodeCoords(allChainPostcodes);
 
   // When this load shares a vehicle+date with one or more siblings, surface
@@ -265,22 +295,23 @@ function LoadDetailView({
   const eta = chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run);
 
   const { mapPins, mapRoutes } = useMemo(
-    () => buildMapData(stops, coords, completedIdx, truckPos, status === "delivered"),
-    [stops, coords, completedIdx, truckPos, status],
+    () => buildMapData(plan, coords, completedIdx, truckPos, status === "delivered"),
+    [plan, coords, completedIdx, truckPos, status],
   );
 
   const events = useMemo<TimelineEvent[]>(
-    () => buildTimeline(run, stops, completedIdx, status),
-    [run, stops, completedIdx, status],
+    () => buildTimeline(run, plan, completedIdx, status),
+    [run, plan, completedIdx, status],
   );
 
-  // For return-to-base routes (typical Ashwood pattern) `fromPostcode` and
-  // `toPostcode` are both the depot, which makes the subtitle read as
-  // "CF44 8ER → CF44 8ER" and hides the actual journey. Prefer the first /
-  // last stop from rawText when we have a real stop list, falling back to
-  // the stored postcodes for legacy rows that never had stops parsed.
-  const originPostcode = stops[0] ?? run.fromPostcode;
-  const finalPostcode = stops.length > 1 ? stops[stops.length - 1] : run.toPostcode;
+  // Subtitle uses the route plan's first/last "real" leg (origin and final
+  // delivery) so return-to-base loads no longer read "CF44 8ER -> CF44 8ER".
+  const subtitleLegs = plan.legs.filter((l) => l.kind !== "return");
+  const originPostcode = subtitleLegs[0]?.postcode ?? run.fromPostcode;
+  const finalPostcode =
+    subtitleLegs.length > 1
+      ? subtitleLegs[subtitleLegs.length - 1].postcode
+      : run.toPostcode;
   const fromName = withNickname(originPostcode, nicknames) || originPostcode;
   const toName = withNickname(finalPostcode, nicknames) || finalPostcode;
   const dateDisp = new Date(`${run.date}T00:00:00`).toLocaleDateString("en-GB", {
@@ -359,7 +390,7 @@ function LoadDetailView({
                 fontSize: 13,
               }}
             >
-              /{total} stops
+              /{plan.dropCount} drops
             </span>
           </div>
         </div>
@@ -392,7 +423,8 @@ function LoadDetailView({
             <div className="card-header">
               <h3>Route &amp; live position</h3>
               <span className="muted" style={{ fontSize: 11 }}>
-                · {total} stop{total === 1 ? "" : "s"}
+                · {plan.dropCount} drop{plan.dropCount === 1 ? "" : "s"}
+                {plan.legs.some((l) => l.kind === "return") && " · returns to base"}
               </span>
               <div className="actions">
                 {truckPos && (
@@ -418,11 +450,17 @@ function LoadDetailView({
                   gap: 10,
                 }}
               >
-                {stops.map((pc, i) => {
-                  const done = completedIdx.has(i);
+                {plan.legs.map((leg, i) => {
+                  // Synthetic legs (collection from the depot, return-to-base)
+                  // are never marked complete — completedIdx tracks indexes
+                  // into the parseStops array, so only legs with stopIndex
+                  // can be done.
+                  const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
+                  const isOrigin = leg.kind === "origin";
+                  const isReturn = leg.kind === "return";
                   return (
                     <li
-                      key={`${pc}-${i}`}
+                      key={`${leg.postcode}-${i}-${leg.kind}`}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -432,7 +470,7 @@ function LoadDetailView({
                         borderRadius: 6,
                         background: done
                           ? "var(--ok-bg)"
-                          : i === 0
+                          : isOrigin
                             ? "var(--mlc-blue-50)"
                             : "var(--surface-alt)",
                       }}
@@ -444,9 +482,11 @@ function LoadDetailView({
                           borderRadius: "50%",
                           background: done
                             ? "var(--ok)"
-                            : i === 0
+                            : isOrigin
                               ? "var(--mlc-blue)"
-                              : "var(--mlc-red)",
+                              : isReturn
+                                ? "var(--ink-500)"
+                                : "var(--mlc-red)",
                           color: "#fff",
                           display: "flex",
                           alignItems: "center",
@@ -460,13 +500,10 @@ function LoadDetailView({
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="bold" style={{ fontSize: 12.5 }}>
-                          {withNickname(pc, nicknames) || pc}
+                          {withNickname(leg.postcode, nicknames) || leg.postcode}
                         </div>
                         <div className="muted mono" style={{ fontSize: 11 }}>
-                          {pc} ·{" "}
-                          {i === 0
-                            ? "Collection"
-                            : `Drop ${i}`}
+                          {leg.postcode} · {leg.label}
                         </div>
                       </div>
                       {done && (
@@ -478,7 +515,7 @@ function LoadDetailView({
                     </li>
                   );
                 })}
-                {stops.length === 0 && (
+                {plan.legs.length === 0 && (
                   <li
                     style={{
                       padding: 24,
@@ -699,7 +736,7 @@ function LoadDetailView({
 
 function buildTimeline(
   run: PlannedRun,
-  stops: string[],
+  plan: RoutePlan,
   completedIdx: Set<number>,
   status: ReturnType<typeof deriveStatus>,
 ): TimelineEvent[] {
@@ -713,26 +750,45 @@ function buildTimeline(
     kind: "info",
   });
 
-  stops.forEach((pc, i) => {
-    const done = completedIdx.has(i);
-    const m = meta[i];
+  // The "next" leg-in-progress is the first leg whose stopIndex hasn't
+  // been completed. Synthetic legs (origin from the depot, return-to-base)
+  // can't be "completed" — we just show them as info anchors.
+  const nextDropLegIdx = plan.legs.findIndex(
+    (l) => l.stopIndex != null && !completedIdx.has(l.stopIndex),
+  );
+
+  plan.legs.forEach((leg, i) => {
+    const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
+    const m = leg.stopIndex != null ? meta[leg.stopIndex] : undefined;
     const at = m?.atISO
       ? formatLocalIso(m.atISO)
       : `${run.date} ${run.startTime || "00:00"}`;
-    const label = i === 0 ? "Collection" : `Drop ${i}`;
     if (done) {
       events.push({
         at,
-        title: `${label} completed at ${pc}`,
+        title: `${leg.label} completed at ${leg.postcode}`,
         meta: m?.by ? `Marked by ${m.by}` : undefined,
         kind: "ok",
       });
-    } else {
-      const nextStopIdx = stops.findIndex((_, idx) => !completedIdx.has(idx));
-      const isCurrent = i === nextStopIdx && status !== "delivered";
+    } else if (leg.kind === "origin") {
       events.push({
         at,
-        title: isCurrent ? `Heading to ${pc}` : `Scheduled: ${label} at ${pc}`,
+        title: `Start: ${leg.label} at ${leg.postcode}`,
+        kind: "info",
+      });
+    } else if (leg.kind === "return") {
+      events.push({
+        at,
+        title: `Return to base at ${leg.postcode}`,
+        kind: "info",
+      });
+    } else {
+      const isCurrent = i === nextDropLegIdx && status !== "delivered";
+      events.push({
+        at,
+        title: isCurrent
+          ? `Heading to ${leg.postcode}`
+          : `Scheduled: ${leg.label} at ${leg.postcode}`,
         kind: isCurrent ? "current" : "pending",
       });
     }
@@ -750,33 +806,49 @@ function formatLocalIso(iso: string): string {
 }
 
 function buildMapData(
-  stops: string[],
+  plan: RoutePlan,
   coords: Record<string, { lat: number; lng: number }>,
   completedIdx: Set<number>,
   truckPos: { lat: number; lng: number } | null,
   delivered: boolean,
 ): { mapPins: MapPin[]; mapRoutes: MapRoute[] } {
   const pins: MapPin[] = [];
-  const stopPoints: Array<[number, number] | null> = stops.map((pc) => {
-    const c = coords[normalizePostcode(pc)];
+  // One [lng, lat] per leg, in plan order. We DON'T filter out missing
+  // points here — instead we track the gaps so the route line still
+  // connects the legs we DO have. This avoids dropping a pin for the
+  // depot just because postcode_coords hasn't been hydrated yet.
+  const legPoints: Array<[number, number] | null> = plan.legs.map((leg) => {
+    const c = coords[normalizePostcode(leg.postcode)];
     return c ? [c.lng, c.lat] : null;
   });
 
-  // First "stop" is treated as origin; the rest are drops.
-  stops.forEach((pc, i) => {
-    const point = stopPoints[i];
+  const isDoneLeg = (leg: PlanLeg) =>
+    leg.stopIndex != null && completedIdx.has(leg.stopIndex);
+
+  // First non-completed real drop = "current" highlight on the map.
+  const nextDropLegIdx = plan.legs.findIndex(
+    (l) => l.kind === "drop" && !isDoneLeg(l),
+  );
+
+  plan.legs.forEach((leg, i) => {
+    const point = legPoints[i];
     if (!point) return;
-    const done = completedIdx.has(i);
-    const nextIdx = stops.findIndex((_, idx) => !completedIdx.has(idx));
-    const isCurrent = !delivered && i === nextIdx;
+    const done = isDoneLeg(leg);
+    const isCurrent = !delivered && i === nextDropLegIdx;
+    // Synthetic origin / return legs render as "origin" pins so they
+    // visually anchor the route line; numbered drops render as "stop".
+    const kind = leg.kind === "drop" ? "stop" : "origin";
     pins.push({
-      id: `stop-${i}`,
-      kind: i === 0 ? "origin" : "stop",
+      id: `leg-${i}-${leg.kind}`,
+      kind,
       lng: point[0],
       lat: point[1],
-      badge: i === 0 ? undefined : String(i),
+      badge:
+        leg.kind === "drop" && leg.stopIndex != null
+          ? String(leg.stopIndex + 1)
+          : undefined,
       state: done ? "done" : isCurrent ? "current" : "pending",
-      label: pc,
+      label: `${leg.postcode} · ${leg.label}`,
     });
   });
 
@@ -791,35 +863,31 @@ function buildMapData(
     });
   }
 
-  // Build done + remaining route segments based on the contiguous stretch of
-  // completed stops at the start of the route.
+  // Route line: split into "done" (everything up to the first incomplete
+  // drop) and "remaining" (from the last completed drop onwards). We
+  // skip null points so a missing geocode mid-route doesn't crash the
+  // line but we still preserve order.
   const routes: MapRoute[] = [];
-  const validPoints = stopPoints.filter(
-    (p): p is [number, number] => p !== null,
+  const firstIncompleteLegIdx = plan.legs.findIndex(
+    (l) => l.kind === "drop" && !isDoneLeg(l),
   );
-  if (validPoints.length >= 2) {
-    let firstIncomplete = stops.findIndex((_, i) => !completedIdx.has(i));
-    if (firstIncomplete === -1) firstIncomplete = stops.length;
-    const donePoints = stopPoints
-      .slice(0, firstIncomplete)
-      .filter((p): p is [number, number] => p !== null);
-    const remainingPoints = stopPoints
-      .slice(Math.max(0, firstIncomplete - 1))
-      .filter((p): p is [number, number] => p !== null);
-    if (donePoints.length >= 2) {
-      routes.push({
-        id: "done",
-        points: donePoints,
-        state: "done",
-      });
-    }
-    if (remainingPoints.length >= 2) {
-      routes.push({
-        id: "remaining",
-        points: remainingPoints,
-        state: "remaining",
-      });
-    }
+  const splitAt =
+    firstIncompleteLegIdx === -1 ? plan.legs.length : firstIncompleteLegIdx;
+  const donePoints = legPoints
+    .slice(0, splitAt)
+    .filter((p): p is [number, number] => p !== null);
+  const remainingPoints = legPoints
+    .slice(Math.max(0, splitAt - 1))
+    .filter((p): p is [number, number] => p !== null);
+  if (donePoints.length >= 2) {
+    routes.push({ id: "done", points: donePoints, state: "done" });
+  }
+  if (remainingPoints.length >= 2) {
+    routes.push({
+      id: "remaining",
+      points: remainingPoints,
+      state: "remaining",
+    });
   }
 
   return { mapPins: pins, mapRoutes: routes };

@@ -16,6 +16,21 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import { useAuth } from "@/components/AuthProvider";
@@ -23,7 +38,7 @@ import { useNicknames } from "@/hooks/useNicknames";
 import { usePostcodeCoords } from "@/hooks/usePostcodeCoords";
 import { parseStops } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { listLoadsForDate } from "@/app/actions/loads";
+import { listLoadsForDate, updateLoadOrders } from "@/app/actions/loads";
 import {
   deriveStatus,
   progressTuple,
@@ -31,7 +46,11 @@ import {
 } from "@/lib/portal/loads";
 import { todayISO } from "@/lib/time-utils";
 import { isoWeekMonday, isoWeekNum, isoYear } from "@/lib/iso-week";
-import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
+import {
+  chainedEta,
+  computeLoadChains,
+  type ChainedInfo,
+} from "@/lib/portal/load-chains";
 import type { PlannedRun } from "@/types/runs";
 
 const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -160,6 +179,48 @@ export default function CustomerLoadsDayPage() {
   const isToday = date === today;
   const totalLoads = loads.length;
   const stackedVehicles = vehicleGroups.groups.filter((g) => g.rows.length > 1).length;
+  const isAdmin = profile?.role === "admin";
+
+  /**
+   * Persist a reorder for one vehicle group. Stamps every row in the group
+   * with a sequential run_order (0..N-1) so chained-start computation picks
+   * up the new order on next render.
+   */
+  async function handleReorder(vehicle: string, fromId: string, toId: string) {
+    if (fromId === toId) return;
+    const groupRows = loads.filter(
+      (r) => (r.vehicle?.trim() ?? "") === vehicle,
+    );
+    const sorted = [...groupRows].sort((a, b) => {
+      if (a.runOrder != null && b.runOrder != null) return a.runOrder - b.runOrder;
+      if (a.runOrder != null) return -1;
+      if (b.runOrder != null) return 1;
+      return (a.startTime ?? "").localeCompare(b.startTime ?? "");
+    });
+    const fromIdx = sorted.findIndex((r) => r.id === fromId);
+    const toIdx = sorted.findIndex((r) => r.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const reordered = arrayMove(sorted, fromIdx, toIdx);
+    const stamped = reordered.map((r, i) => ({ ...r, runOrder: i }));
+
+    // Optimistic update: replace just this group's rows in `loads`.
+    setLoads((prev) => {
+      const otherRows = prev.filter(
+        (r) => (r.vehicle?.trim() ?? "") !== vehicle,
+      );
+      return [...otherRows, ...stamped];
+    });
+
+    const res = await updateLoadOrders(
+      stamped.map((r) => ({ id: r.id, runOrder: r.runOrder ?? 0 })),
+    );
+    if (res.error) {
+      // Roll back by re-fetching authoritative order from the server.
+      const fresh = await listLoadsForDate(date);
+      if (!fresh.error) setLoads(fresh.loads ?? []);
+      alert(`Failed to save order: ${res.error}`);
+    }
+  }
 
   return (
     <>
@@ -279,6 +340,8 @@ export default function CustomerLoadsDayPage() {
               chains={chains}
               nicknames={nicknames}
               today={today}
+              isAdmin={isAdmin}
+              onReorder={handleReorder}
             />
           ))}
           {vehicleGroups.noVehicle.length > 0 && (
@@ -288,6 +351,8 @@ export default function CustomerLoadsDayPage() {
               chains={chains}
               nicknames={nicknames}
               today={today}
+              isAdmin={false}
+              onReorder={handleReorder}
             />
           )}
         </div>
@@ -302,14 +367,54 @@ function VehicleGroupCard({
   chains,
   nicknames,
   today,
+  isAdmin,
+  onReorder,
 }: {
   vehicle: string;
   rows: PlannedRun[];
   chains: ReturnType<typeof computeLoadChains>;
   nicknames: Record<string, string>;
   today: string;
+  isAdmin: boolean;
+  onReorder: (vehicle: string, fromId: string, toId: string) => void;
 }) {
   const stacked = rows.length > 1;
+  // Drag-and-drop only matters when:
+  //   1. This is an admin (customers shouldn't be reshuffling routes), and
+  //   2. There's more than one load to reorder, and
+  //   3. The group is bound to a real vehicle (Awaiting-reg has no chain).
+  const reorderable = isAdmin && stacked && !!vehicle;
+
+  // PointerSensor with a short distance threshold prevents accidental drags
+  // when the operator clicks a row link — same pattern as PlannerGrid.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    onReorder(vehicle, String(active.id), String(over.id));
+  }
+
+  const tableBody = (
+    <tbody>
+      {rows.map((r) => (
+        <SortableLoadRow
+          key={r.id}
+          row={r}
+          chained={chains.get(r.id)}
+          status={deriveStatus(r, today)}
+          progress={progressTuple(r)}
+          eta={chainedEta(r, chains.get(r.id))}
+          fromName={withNickname(r.fromPostcode, nicknames)}
+          toName={withNickname(r.toPostcode, nicknames)}
+          reorderable={reorderable}
+        />
+      ))}
+    </tbody>
+  );
+
   return (
     <div className="card">
       <div className="card-header">
@@ -330,12 +435,18 @@ function VehicleGroupCard({
               </span>
             </>
           )}
+          {reorderable && (
+            <span style={{ marginLeft: 8, fontSize: 10, opacity: 0.7 }}>
+              · drag the handle to reorder
+            </span>
+          )}
         </span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="data">
           <thead>
             <tr>
+              {reorderable && <th style={{ width: 24 }} />}
               <th>Load</th>
               <th>Customer</th>
               <th>Route</th>
@@ -346,82 +457,140 @@ function VehicleGroupCard({
               <th />
             </tr>
           </thead>
-          <tbody>
-            {rows.map((r) => {
-              const chained = chains.get(r.id);
-              const status = deriveStatus(r, today);
-              const prog = progressTuple(r);
-              const eta = chainedEta(r, chained);
-              const fromName = withNickname(r.fromPostcode, nicknames);
-              const toName = withNickname(r.toPostcode, nicknames);
-              return (
-                <tr key={r.id}>
-                  <td>
-                    <Link
-                      href={`/portal/loads/${r.id}`}
-                      style={{
-                        color: "inherit",
-                        textDecoration: "none",
-                        display: "block",
-                      }}
-                    >
-                      <div className="bold mono" style={{ fontSize: 12 }}>
-                        {r.jobNumber || r.id}
-                      </div>
-                      <div className="muted mono" style={{ fontSize: 10.5 }}>
-                        {r.loadRef || "—"}
-                      </div>
-                    </Link>
-                  </td>
-                  <td style={{ fontSize: 12 }}>{r.customer}</td>
-                  <td>
-                    <div className="row gap-4" style={{ fontSize: 11.5 }}>
-                      <span className="mono">{r.fromPostcode}</span>
-                      <Icon name="arrowR" size={10} className="muted" />
-                      <span className="mono">{r.toPostcode || "—"}</span>
-                    </div>
-                    <div className="muted" style={{ fontSize: 10.5 }}>
-                      {fromName} → {toName}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="mono tnum" style={{ fontSize: 11.5 }}>
-                      {chained?.chainedStartTime ?? r.startTime ?? "—"}
-                    </div>
-                    {chained && (
-                      <div className="muted" style={{ fontSize: 10 }}>
-                        booked {r.startTime}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <div className="mono tnum" style={{ fontSize: 11.5 }}>
-                      {status === "delivered" ? "—" : eta}
-                    </div>
-                  </td>
-                  <td>
-                    <div className="mono tnum" style={{ fontSize: 11 }}>
-                      {prog.completed}/{prog.total}
-                    </div>
-                  </td>
-                  <td>
-                    <StatusPill status={status} />
-                  </td>
-                  <td>
-                    <Link
-                      href={`/portal/loads/${r.id}`}
-                      className="btn sm ghost"
-                      aria-label="Open load"
-                    >
-                      <Icon name="chevR" size={12} />
-                    </Link>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
+          {reorderable ? (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={rows.map((r) => r.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {tableBody}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            tableBody
+          )}
         </table>
       </div>
     </div>
+  );
+}
+
+function SortableLoadRow({
+  row,
+  chained,
+  status,
+  progress,
+  eta,
+  fromName,
+  toName,
+  reorderable,
+}: {
+  row: PlannedRun;
+  chained: ChainedInfo | undefined;
+  status: ReturnType<typeof deriveStatus>;
+  progress: ReturnType<typeof progressTuple>;
+  eta: string;
+  fromName: string;
+  toName: string;
+  reorderable: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: row.id, disabled: !reorderable });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    background: isDragging ? "var(--surface-alt)" : undefined,
+    opacity: isDragging ? 0.7 : 1,
+  };
+
+  return (
+    <tr ref={setNodeRef} style={style}>
+      {reorderable && (
+        <td
+          {...attributes}
+          {...listeners}
+          title="Drag to reorder"
+          style={{
+            cursor: isDragging ? "grabbing" : "grab",
+            color: "var(--ink-500)",
+            userSelect: "none",
+            textAlign: "center",
+          }}
+        >
+          <span style={{ fontSize: 14, lineHeight: 1 }}>⋮⋮</span>
+        </td>
+      )}
+      <td>
+        <Link
+          href={`/portal/loads/${row.id}`}
+          style={{
+            color: "inherit",
+            textDecoration: "none",
+            display: "block",
+          }}
+        >
+          <div className="bold mono" style={{ fontSize: 12 }}>
+            {row.jobNumber || row.id}
+          </div>
+          <div className="muted mono" style={{ fontSize: 10.5 }}>
+            {row.loadRef || "—"}
+          </div>
+        </Link>
+      </td>
+      <td style={{ fontSize: 12 }}>{row.customer}</td>
+      <td>
+        <div className="row gap-4" style={{ fontSize: 11.5 }}>
+          <span className="mono">{row.fromPostcode}</span>
+          <Icon name="arrowR" size={10} className="muted" />
+          <span className="mono">{row.toPostcode || "—"}</span>
+        </div>
+        <div className="muted" style={{ fontSize: 10.5 }}>
+          {fromName} → {toName}
+        </div>
+      </td>
+      <td>
+        <div className="mono tnum" style={{ fontSize: 11.5 }}>
+          {chained?.chainedStartTime ?? row.startTime ?? "—"}
+        </div>
+        {chained && (
+          <div className="muted" style={{ fontSize: 10 }}>
+            booked {row.startTime}
+          </div>
+        )}
+      </td>
+      <td>
+        <div className="mono tnum" style={{ fontSize: 11.5 }}>
+          {status === "delivered" ? "—" : eta}
+        </div>
+      </td>
+      <td>
+        <div className="mono tnum" style={{ fontSize: 11 }}>
+          {progress.completed}/{progress.total}
+        </div>
+      </td>
+      <td>
+        <StatusPill status={status} />
+      </td>
+      <td>
+        <Link
+          href={`/portal/loads/${row.id}`}
+          className="btn sm ghost"
+          aria-label="Open load"
+        >
+          <Icon name="chevR" size={12} />
+        </Link>
+      </td>
+    </tr>
   );
 }

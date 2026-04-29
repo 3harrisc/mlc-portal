@@ -120,6 +120,25 @@ export async function updateLoad(
   return { success: true };
 }
 
+/**
+ * Bulk-update run_order for a set of loads (drag-reorder within a vehicle on
+ * a single day). Mirrors `updateRunOrders` for the dispatch planner.
+ */
+export async function updateLoadOrders(
+  orders: Array<{ id: string; runOrder: number }>
+) {
+  const { supabase } = await getUser();
+
+  const promises = orders.map(({ id, runOrder }) =>
+    supabase.from("loads").update({ run_order: runOrder }).eq("id", id)
+  );
+
+  const results = await Promise.all(promises);
+  const firstError = results.find((r) => r.error);
+  if (firstError?.error) return { error: firstError.error.message };
+  return { success: true };
+}
+
 /** Inline-edit helper: assign / clear the vehicle on a single load. */
 export async function setLoadVehicle(id: string, vehicle: string) {
   const { supabase } = await getUser();

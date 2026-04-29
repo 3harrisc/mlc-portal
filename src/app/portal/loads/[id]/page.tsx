@@ -15,7 +15,8 @@ import { useVehiclePositions } from "@/hooks/useVehiclePositions";
 import { normVehicle } from "@/lib/webfleet";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteLoad } from "@/app/actions/loads";
+import { deleteLoad, setLoadVehicle } from "@/app/actions/loads";
+import { listVehicles } from "@/app/actions/fleet";
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import PortalMap, {
@@ -118,7 +119,15 @@ export default function LoadDetailPage() {
     );
   }
 
-  return <LoadDetailView run={run} siblings={siblings} nicknames={nicknames} />;
+  return (
+    <LoadDetailView
+      run={run}
+      siblings={siblings}
+      nicknames={nicknames}
+      onRunChange={setRun}
+      onSiblingsChange={setSiblings}
+    />
+  );
 }
 
 function PageHeaderBack() {
@@ -137,10 +146,14 @@ function LoadDetailView({
   run,
   siblings,
   nicknames,
+  onRunChange,
+  onSiblingsChange,
 }: {
   run: PlannedRun;
   siblings: PlannedRun[];
   nicknames: Record<string, string>;
+  onRunChange: (run: PlannedRun) => void;
+  onSiblingsChange: (siblings: PlannedRun[]) => void;
 }) {
   const router = useRouter();
   const { profile } = useAuth();
@@ -151,6 +164,57 @@ function LoadDetailView({
   const { positions } = useVehiclePositions();
   const truckPos = positions[normVehicle(run.vehicle)] ?? null;
   const isAdmin = profile?.role === "admin";
+
+  // Canonical fleet list for the inline reg picker (admin only). Includes
+  // RENTAL / SUBBY pseudo-vehicles via the `vehicles` table.
+  const [fleetVehicles, setFleetVehicles] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    void listVehicles().then((res) => {
+      if (cancelled) return;
+      setFleetVehicles(
+        (res.vehicles ?? []).filter((v) => v.active).map((v) => v.id),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  const [savingVehicle, setSavingVehicle] = useState(false);
+
+  /**
+   * Persist a new registration on this load. After success we refresh the
+   * local `run` state and re-fetch siblings so chained-start computation
+   * downstream picks up the change without a full page reload.
+   */
+  async function handleSetVehicle(raw: string) {
+    const trimmed = raw.trim().toUpperCase();
+    if (trimmed === (run.vehicle ?? "").toUpperCase()) return;
+    setSavingVehicle(true);
+    const res = await setLoadVehicle(run.id, trimmed);
+    if (res.error) {
+      setSavingVehicle(false);
+      showToast(`Couldn't save reg: ${res.error}`, "err");
+      return;
+    }
+    onRunChange({ ...run, vehicle: trimmed });
+    // Re-pull siblings so chained-start times reflect the new vehicle binding.
+    if (trimmed) {
+      const supabase = createClient();
+      const { data: sibRows } = await supabase
+        .from("loads")
+        .select("*")
+        .eq("date", run.date)
+        .eq("vehicle", trimmed);
+      if (sibRows) onSiblingsChange(sibRows.map(rowToRun));
+    } else {
+      onSiblingsChange([]);
+    }
+    setSavingVehicle(false);
+    showToast(trimmed ? `Vehicle set to ${trimmed}` : "Vehicle cleared");
+  }
 
   const handleDelete = () => {
     const label = run.jobNumber || run.id;
@@ -210,8 +274,15 @@ function LoadDetailView({
     [run, stops, completedIdx, status],
   );
 
-  const fromName = withNickname(run.fromPostcode, nicknames) || run.fromPostcode;
-  const toName = withNickname(run.toPostcode, nicknames) || run.toPostcode;
+  // For return-to-base routes (typical Ashwood pattern) `fromPostcode` and
+  // `toPostcode` are both the depot, which makes the subtitle read as
+  // "CF44 8ER → CF44 8ER" and hides the actual journey. Prefer the first /
+  // last stop from rawText when we have a real stop list, falling back to
+  // the stored postcodes for legacy rows that never had stops parsed.
+  const originPostcode = stops[0] ?? run.fromPostcode;
+  const finalPostcode = stops.length > 1 ? stops[stops.length - 1] : run.toPostcode;
+  const fromName = withNickname(originPostcode, nicknames) || originPostcode;
+  const toName = withNickname(finalPostcode, nicknames) || finalPostcode;
   const dateDisp = new Date(`${run.date}T00:00:00`).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
@@ -246,8 +317,8 @@ function LoadDetailView({
             )}
           </h1>
           <div className="page-subtitle">
-            {run.customer} · {fromName} ({run.fromPostcode}) → {toName} (
-            {run.toPostcode || "—"}) · {dateDisp}
+            {run.customer} · {fromName} ({originPostcode}) → {toName} (
+            {finalPostcode || "—"}) · {dateDisp}
           </div>
         </div>
         <div className="row gap-8">
@@ -474,22 +545,68 @@ function LoadDetailView({
               <h3>Vehicle &amp; driver</h3>
             </div>
             <div className="card-body">
-              <div className="row gap-12" style={{ marginBottom: driver ? 14 : 0 }}>
+              <div
+                className="row gap-12"
+                style={{ marginBottom: driver ? 14 : 0, alignItems: "flex-start" }}
+              >
                 <div
                   className="img-placeholder"
-                  style={{ width: 80, height: 60 }}
+                  style={{ width: 80, height: 60, flexShrink: 0 }}
                 >
                   vehicle
                 </div>
-                <div>
-                  <div className="bold mono" style={{ fontSize: 14 }}>
-                    {run.vehicle || "Unassigned"}
-                  </div>
-                  <div className="muted" style={{ fontSize: 11 }}>
-                    {run.vehicle
-                      ? "Tractor unit"
-                      : "Awaiting vehicle assignment"}
-                  </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {isAdmin ? (
+                    <>
+                      <input
+                        type="text"
+                        list="load-detail-fleet"
+                        defaultValue={run.vehicle ?? ""}
+                        onBlur={(e) => void handleSetVehicle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          if (e.key === "Escape") {
+                            (e.target as HTMLInputElement).value = run.vehicle ?? "";
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        placeholder="Pick reg…"
+                        disabled={savingVehicle}
+                        className="input mono"
+                        style={{
+                          height: 32,
+                          padding: "0 10px",
+                          fontSize: 13,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          width: "100%",
+                        }}
+                      />
+                      <datalist id="load-detail-fleet">
+                        {fleetVehicles.map((v) => (
+                          <option key={v} value={v} />
+                        ))}
+                      </datalist>
+                      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                        {savingVehicle
+                          ? "Saving…"
+                          : run.vehicle
+                            ? "Tractor unit · type or pick from fleet"
+                            : "Assign a registration to enable tracking"}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="bold mono" style={{ fontSize: 14 }}>
+                        {run.vehicle || "Unassigned"}
+                      </div>
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {run.vehicle
+                          ? "Tractor unit"
+                          : "Awaiting vehicle assignment"}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               {driver && (

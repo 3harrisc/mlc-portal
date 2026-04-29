@@ -103,7 +103,13 @@ export default function LoadsPage() {
         return next;
       });
       alert(`Failed to set vehicle: ${res.error}`);
+      return;
     }
+    // Refresh PortalData so the saved reg survives a navigate-away-and-back.
+    // Without this, the in-memory cache in PortalDataProvider keeps the old
+    // (empty) vehicle, and the optimistic override is lost when LoadsPage
+    // unmounts — making it look like the reg "didn't save."
+    refetch();
   }
 
   async function handleBulkDelete() {

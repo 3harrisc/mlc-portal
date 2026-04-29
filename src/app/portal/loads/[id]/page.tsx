@@ -15,7 +15,10 @@ import { useVehiclePositions } from "@/hooks/useVehiclePositions";
 import { normVehicle } from "@/lib/webfleet";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteLoad, setLoadVehicle } from "@/app/actions/loads";
+import { deleteLoad, setLoadVehicle, updateLoad } from "@/app/actions/loads";
+import LoadEditModal, {
+  type LoadEdits,
+} from "@/components/portal/LoadEditModal";
 import { listVehicles } from "@/app/actions/fleet";
 import { buildRoutePlan, type RoutePlan, type PlanLeg } from "@/lib/portal/route-plan";
 import Icon from "@/components/portal/Icon";
@@ -236,6 +239,57 @@ function LoadDetailView({
     showToast(trimmed ? `Vehicle set to ${trimmed}` : "Vehicle cleared");
   }
 
+  // Edit modal: state + persistence handler. We refetch siblings on
+  // success because changes to runType / startTime affect chained-start
+  // computation for stacked loads on the same vehicle+date.
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  async function handleSaveEdits(edits: LoadEdits) {
+    setEditSaving(true);
+    const res = await updateLoad(run.id, {
+      runType: edits.runType,
+      startTime: edits.startTime,
+      collectionTime: edits.collectionTime || null,
+      collectionDate: edits.collectionDate || null,
+      fromPostcode: edits.fromPostcode,
+      toPostcode: edits.toPostcode,
+      rawText: edits.rawText,
+      returnToBase: edits.returnToBase,
+      serviceMins: edits.serviceMins,
+      includeBreaks: edits.includeBreaks,
+    });
+    if (res.error) {
+      setEditSaving(false);
+      showToast(`Couldn't save: ${res.error}`, "err");
+      return;
+    }
+    onRunChange({
+      ...run,
+      runType: edits.runType,
+      startTime: edits.startTime,
+      collectionTime: edits.collectionTime || undefined,
+      collectionDate: edits.collectionDate || undefined,
+      fromPostcode: edits.fromPostcode,
+      toPostcode: edits.toPostcode,
+      rawText: edits.rawText,
+      returnToBase: edits.returnToBase,
+      serviceMins: edits.serviceMins,
+      includeBreaks: edits.includeBreaks,
+    });
+    if (run.vehicle?.trim()) {
+      const supabase = createClient();
+      const { data: sibRows } = await supabase
+        .from("loads")
+        .select("*")
+        .eq("date", run.date)
+        .eq("vehicle", run.vehicle);
+      if (sibRows) onSiblingsChange(sibRows.map(rowToRun));
+    }
+    setEditSaving(false);
+    setEditOpen(false);
+    showToast("Load updated");
+  }
+
   const handleDelete = () => {
     const label = run.jobNumber || run.id;
     if (!window.confirm(`Delete load ${label}? This cannot be undone.`)) return;
@@ -359,6 +413,16 @@ function LoadDetailView({
           <button className="btn" type="button">
             <Icon name="download" size={13} /> Download POD
           </button>
+          {isAdmin && (
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setEditOpen(true)}
+              title="Edit run details, switch run type, reorder stops"
+            >
+              <Icon name="settings" size={13} /> Edit run
+            </button>
+          )}
           {isAdmin && (
             <button
               className="btn"
@@ -730,6 +794,14 @@ function LoadDetailView({
           </div>
         </div>
       </div>
+
+      <LoadEditModal
+        open={editOpen}
+        run={run}
+        saving={editSaving}
+        onClose={() => setEditOpen(false)}
+        onSave={handleSaveEdits}
+      />
     </>
   );
 }

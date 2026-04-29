@@ -6,6 +6,7 @@ import { useAuth } from "@/components/AuthProvider";
 import BrandMark from "./BrandMark";
 import Icon, { type IconName } from "./Icon";
 import { usePortalData } from "./PortalDataContext";
+import BuildBadge from "./BuildBadge";
 
 interface NavItem {
   href: string;
@@ -153,7 +154,7 @@ export default function Sidebar() {
           <span className="status-dot" />
           All systems normal
         </span>
-        <span className="mono">v4.2</span>
+        <BuildBadge />
       </div>
     </aside>
   );

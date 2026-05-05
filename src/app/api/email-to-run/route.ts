@@ -8,6 +8,7 @@ import type { PlannedRun } from "@/types/runs";
 import { ensureCustomer } from "@/lib/customer-contacts";
 import { sendNotification } from "@/lib/email/notifications";
 import { bookingReceivedEmail } from "@/lib/email/templates";
+import { pinConsolid8SameDayBackloads } from "@/lib/email-parse/consolid8-rules";
 
 const DEFAULT_PROGRESS = {
   completedIdx: [],
@@ -294,6 +295,7 @@ ${depotList}
 - For backloads: "Booking" times, delivery times, and destination times go in "deliveryTime" — this is when goods must arrive at the delivery destination
 - "collectionTime" is ONLY for when the email explicitly states a time to arrive at the COLLECTION/PICKUP site (e.g. "Collect at 14:00", "Pick up from 08:00"). Most backloads do NOT have a collection time — leave it empty unless explicitly stated
 - ALL runs in the same email are for the SAME date. Use the date from the table/header for ALL runs including backloads listed at the bottom
+- CONSOLID8 SPECIFIC: For Consolid8 (or CON001) emails, any backload from "Middleton Foods" / "Willenhall" (WV13 3LH) or "Purity Soft Drinks" / "Wednesbury" (WS10 0BU) is ALWAYS collected on the SAME DAY as the outbound deliveries. Do NOT assign a later date to these backloads even if the email mentions "next day", "for tomorrow", or similar phrasing — the dispatcher collects them on the same day as the outbound run.
 - Pallet counts, curtain-sider requirements, etc. go in "notes"
 - If there's only ONE run in the email, still return it in the "runs" array
 - Check BOTH the email body AND any attached PDF/Excel documents
@@ -525,6 +527,16 @@ export async function POST(req: Request) {
         }
       }
     }
+
+    // Consolid8 same-day backload enforcement.
+    //
+    // The dispatcher's standing rule is: any Consolid8 backload from
+    // Middleton Foods (WV13 3LH / Willenhall) or Purity Soft Drinks
+    // (WS10 0BU / Wednesbury) is collected on the SAME DAY as the
+    // Consolid8 outbound deliveries in the same email. The prompt tells
+    // Claude this, but we also pin it server-side so a misread doesn't
+    // silently push the backload to the wrong day.
+    pinConsolid8SameDayBackloads(parsedRuns, resolveLocation);
 
     // 6. Process each parsed run into a PlannedRun
     const createdRuns: { jobNumber: string; runId: string; customer: string; stops: number; name: string }[] = [];

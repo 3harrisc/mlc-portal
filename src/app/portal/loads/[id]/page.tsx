@@ -29,7 +29,7 @@ import PortalMap, {
 } from "@/components/portal/PortalMap";
 import ShareLinkPanel from "@/components/portal/ShareLinkPanel";
 import { useToast } from "@/components/portal/ToastContext";
-import { deriveStatus, quickEta } from "@/lib/portal/loads";
+import { deriveStatus, displayDestination, quickEta } from "@/lib/portal/loads";
 import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
 
 interface TimelineEvent {
@@ -360,12 +360,16 @@ function LoadDetailView({
 
   // Subtitle uses the route plan's first/last "real" leg (origin and final
   // delivery) so return-to-base loads no longer read "CF44 8ER -> CF44 8ER".
+  // Falls back to displayDestination(run) when the plan only has one leg —
+  // covers email-forwarded runs where the lorry returns to base, so the
+  // shown destination is the parsed delivery postcode rather than the
+  // round-trip origin.
   const subtitleLegs = plan.legs.filter((l) => l.kind !== "return");
   const originPostcode = subtitleLegs[0]?.postcode ?? run.fromPostcode;
   const finalPostcode =
     subtitleLegs.length > 1
       ? subtitleLegs[subtitleLegs.length - 1].postcode
-      : run.toPostcode;
+      : displayDestination(run);
   const fromName = withNickname(originPostcode, nicknames) || originPostcode;
   const toName = withNickname(finalPostcode, nicknames) || finalPostcode;
   const dateDisp = new Date(`${run.date}T00:00:00`).toLocaleDateString("en-GB", {

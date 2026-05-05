@@ -1,6 +1,6 @@
 import type { PlannedRun } from "@/types/runs";
 import type { LoadStatus } from "@/components/portal/StatusPill";
-import { parseStops } from "@/lib/postcode-utils";
+import { extractPostcode, parseStops } from "@/lib/postcode-utils";
 import { estimateFinishTime } from "@/lib/runDuration";
 
 /**
@@ -81,6 +81,48 @@ export function displayEta(run: PlannedRun, computed: string): string {
   const b = toMin(eta);
   if (a == null || b == null) return eta || booked || "—";
   return a >= b ? booked : eta;
+}
+
+/**
+ * The "real" delivery destination for a run, for display on customer-facing
+ * surfaces.
+ *
+ * Why
+ * ---
+ * Most of our forwarded-email runs and admin route-planner runs have
+ * `to_postcode` set to the SAME value as `from_postcode` because the lorry
+ * returns to base after the delivery (returnToBase=true). Showing
+ * "NG22 8TX → NG22 8TX" tells the customer nothing useful — they want to
+ * see where the load is actually going. The real destination is parked in
+ * `raw_text` (the stop list).
+ *
+ * Resolution order:
+ *   1. If `to_postcode` is non-empty and *different* to `from_postcode`,
+ *      use it. (Catches portal bookings, the standing fixed runs which use
+ *      `to_postcode` for the friendly label like "Tamworth 1", and any
+ *      explicit point-to-point work.)
+ *   2. Otherwise fall back to the LAST stop in `raw_text` — for an outbound
+ *      run that's the customer's delivery point. We prefer last over first
+ *      because multi-stop runs sometimes start with a yard / pickup stop.
+ *   3. Otherwise return `to_postcode` (which may be empty).
+ *
+ * The returned string is whatever shape it lives in (postcode for typical
+ * runs, friendly label for fixed runs) — callers can display it as-is.
+ */
+export function displayDestination(run: PlannedRun): string {
+  const from = (run.fromPostcode ?? "").trim().toUpperCase();
+  const to = (run.toPostcode ?? "").trim();
+  if (to && to.toUpperCase() !== from) return to;
+
+  const stops = parseStops(run.rawText);
+  if (stops.length > 0) return stops[stops.length - 1];
+
+  // No stops parsed — try to extract a single postcode from raw_text
+  // (the fixed-runs materialiser writes `raw_text = "B78 3HJ"`, no newline).
+  const single = extractPostcode(run.rawText ?? "");
+  if (single) return single;
+
+  return run.toPostcode ?? "";
 }
 
 /** "25 Apr" — short British date for table cells. */

@@ -20,6 +20,7 @@ import StatusPill, {
 import { usePortalSearch } from "@/components/portal/PortalSearchContext";
 import { useToast } from "@/components/portal/ToastContext";
 import {
+  displayDestination,
   matchesSearch,
   progressTuple,
   shortDate,
@@ -39,6 +40,13 @@ interface LoadRow {
   status: LoadStatus;
   fromName: string;
   toName: string;
+  /**
+   * The "real" delivery destination shown in the route cell — derived via
+   * `displayDestination(run)` so return-to-base runs surface the actual
+   * delivery postcode (parsed from raw_text) instead of repeating the
+   * origin postcode.
+   */
+  destination: string;
   eta: string;
   progress: { completed: number; total: number };
   /** Set when this load is leg 2+ of a stacked vehicle/date group. */
@@ -195,11 +203,13 @@ export default function LoadsPage() {
     () =>
       enrichedAll.map(({ run, status }) => {
         const chained = chains.get(run.id);
+        const destination = displayDestination(run);
         return {
           run,
           status,
           fromName: withNickname(run.fromPostcode, nicknames),
-          toName: withNickname(run.toPostcode, nicknames),
+          toName: withNickname(destination, nicknames),
+          destination,
           eta: chainedEta(run, chained),
           progress: progressTuple(run),
           chained,
@@ -739,7 +749,7 @@ function LoadTableRow({
   onCopyToPlanner: (id: string) => Promise<void>;
   copying: boolean;
 }) {
-  const { run, status, fromName, toName, eta, progress } = row;
+  const { run, status, fromName, toName, destination, eta, progress } = row;
   // Use local override if present (shows immediately after admin edit), else canonical.
   const currentVehicle = vehicleOverride ?? run.vehicle ?? "";
   const stopsExtra = progress.total - 2;
@@ -792,7 +802,7 @@ function LoadTableRow({
         <div className="row gap-4" style={{ fontSize: 11.5 }}>
           <span className="mono">{run.fromPostcode}</span>
           <Icon name="arrowR" size={10} className="muted" />
-          <span className="mono">{run.toPostcode || "—"}</span>
+          <span className="mono">{destination || "—"}</span>
         </div>
         <div className="muted" style={{ fontSize: 10.5 }}>
           {fromName} → {toName}

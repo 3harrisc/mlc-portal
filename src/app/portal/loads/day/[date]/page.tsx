@@ -41,6 +41,7 @@ import { withNickname } from "@/lib/postcode-nicknames";
 import { listLoadsForDate, updateLoadOrders } from "@/app/actions/loads";
 import {
   deriveStatus,
+  displayDestination,
   progressTuple,
   shortDate,
 } from "@/lib/portal/loads";
@@ -399,19 +400,23 @@ function VehicleGroupCard({
 
   const tableBody = (
     <tbody>
-      {rows.map((r) => (
-        <SortableLoadRow
-          key={r.id}
-          row={r}
-          chained={chains.get(r.id)}
-          status={deriveStatus(r, today)}
-          progress={progressTuple(r)}
-          eta={chainedEta(r, chains.get(r.id))}
-          fromName={withNickname(r.fromPostcode, nicknames)}
-          toName={withNickname(r.toPostcode, nicknames)}
-          reorderable={reorderable}
-        />
-      ))}
+      {rows.map((r) => {
+        const destination = displayDestination(r);
+        return (
+          <SortableLoadRow
+            key={r.id}
+            row={r}
+            chained={chains.get(r.id)}
+            status={deriveStatus(r, today)}
+            progress={progressTuple(r)}
+            eta={chainedEta(r, chains.get(r.id))}
+            fromName={withNickname(r.fromPostcode, nicknames)}
+            toName={withNickname(destination, nicknames)}
+            destination={destination}
+            reorderable={reorderable}
+          />
+        );
+      })}
     </tbody>
   );
 
@@ -487,6 +492,7 @@ function SortableLoadRow({
   eta,
   fromName,
   toName,
+  destination,
   reorderable,
 }: {
   row: PlannedRun;
@@ -496,6 +502,8 @@ function SortableLoadRow({
   eta: string;
   fromName: string;
   toName: string;
+  /** Resolved delivery destination — see displayDestination() in lib/portal/loads. */
+  destination: string;
   reorderable: boolean;
 }) {
   const {
@@ -553,7 +561,7 @@ function SortableLoadRow({
         <div className="row gap-4" style={{ fontSize: 11.5 }}>
           <span className="mono">{row.fromPostcode}</span>
           <Icon name="arrowR" size={10} className="muted" />
-          <span className="mono">{row.toPostcode || "—"}</span>
+          <span className="mono">{destination || "—"}</span>
         </div>
         <div className="muted" style={{ fontSize: 10.5 }}>
           {fromName} → {toName}

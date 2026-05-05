@@ -20,6 +20,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { createClient } from "@/lib/supabase/client";
 import { createRuns as createRunsAction, nextJobNumber } from "@/app/actions/runs";
+import { createLoads as createLoadsAction } from "@/app/actions/loads";
 import { createTemplate as createTemplateAction, deleteTemplate as deleteTemplateAction } from "@/app/actions/templates";
 import { createCustomer as createCustomerAction } from "@/app/admin/customers/actions";
 import type { PlannedRun, CustomerKey, RouteTemplate, RunType } from "@/types/runs";
@@ -314,6 +315,13 @@ export default function PlanRoutePage() {
   const [repeatStartDate, setRepeatStartDate] = useState<string>(date);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string>("");
+  /**
+   * Where the saved route lands. Default = "loads" (customer portal) so
+   * planned routes are visible on /portal/loads -- matching how forwards
+   * and portal bookings flow. Switch to "runs" only when the operator is
+   * actually scheduling on the dispatch planner.
+   */
+  const [saveTarget, setSaveTarget] = useState<"loads" | "runs">("loads");
   const [showAllRuns, setShowAllRuns] = useState(false);
   const [runSearch, setRunSearch] = useState("");
 
@@ -810,7 +818,13 @@ export default function PlanRoutePage() {
       });
     }
 
-    const result = await createRunsAction(newRuns);
+    // Route to the right table based on the operator's pick. createLoads
+    // and createRuns share the same payload shape (loads mirrors runs), so
+    // newRuns can be passed straight through.
+    const result =
+      saveTarget === "loads"
+        ? await createLoadsAction(newRuns)
+        : await createRunsAction(newRuns);
     setSaving(false);
     if (result.error) {
       setRouteError(result.error);
@@ -820,9 +834,11 @@ export default function PlanRoutePage() {
     const next = [...newRuns, ...plannedRuns].sort((a, b) => (a.date < b.date ? -1 : 1));
     setPlannedRuns(next);
 
+    const dest =
+      saveTarget === "loads" ? "customer portal (Loads)" : "dispatch planner (Runs)";
     const msg = newRuns.length === 1
-      ? `Run ${newRuns[0].jobNumber} saved!`
-      : `${newRuns.length} runs saved!`;
+      ? `Run ${newRuns[0].jobNumber} saved to ${dest}.`
+      : `${newRuns.length} runs saved to ${dest}.`;
     setSaveMessage(msg);
     setTimeout(() => setSaveMessage(""), 5000);
   }
@@ -1293,6 +1309,40 @@ export default function PlanRoutePage() {
               </div>
             </div>
             <div className="text-xs text-gray-400 mt-3">Creates runs for weekdays only (Mon–Fri). Weekend days are skipped automatically.</div>
+
+            {/* Where the save lands. Default is the customer portal so the
+                customer's tracking page picks it up; switch when the route
+                is actually being committed to the dispatch planner. */}
+            <div className="mt-4">
+              <label className="block text-xs text-gray-400 mb-1">Save to</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSaveTarget("loads")}
+                  className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    saveTarget === "loads"
+                      ? "bg-emerald-600/20 border-emerald-500 text-emerald-200"
+                      : "bg-transparent border-white/15 text-gray-300 hover:border-white/30"
+                  }`}
+                >
+                  Customer portal
+                  <div className="text-[10px] opacity-70">/portal/loads</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSaveTarget("runs")}
+                  className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    saveTarget === "runs"
+                      ? "bg-emerald-600/20 border-emerald-500 text-emerald-200"
+                      : "bg-transparent border-white/15 text-gray-300 hover:border-white/30"
+                  }`}
+                >
+                  Dispatch planner
+                  <div className="text-[10px] opacity-70">/runs</div>
+                </button>
+              </div>
+            </div>
+
             <button onClick={createRuns} disabled={saving} className="mt-4 w-full px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-colors">
               {saving ? "Saving..." : `Create run${repeatMonFri ? "s" : ""} (save)`}
             </button>

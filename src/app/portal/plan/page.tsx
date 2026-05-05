@@ -21,6 +21,8 @@ import { useAuth } from "@/components/AuthProvider";
 import { createClient } from "@/lib/supabase/client";
 import {
   createRuns as createRunsAction,
+  // saveTarget toggle below routes to createLoads when the operator picks
+  // the customer portal — see createRuns().
   nextJobNumber,
   deleteRun as deleteRunAction,
 } from "@/app/actions/runs";
@@ -28,6 +30,7 @@ import {
   createTemplate as createTemplateAction,
   deleteTemplate as deleteTemplateAction,
 } from "@/app/actions/templates";
+import { createLoads as createLoadsAction } from "@/app/actions/loads";
 import { createCustomer as createCustomerAction } from "@/app/admin/customers/actions";
 import {
   type PlannedRun,
@@ -115,6 +118,12 @@ export default function PlanPage() {
   const [templateName, setTemplateName] = useState<string>("");
   const [plannedRuns, setPlannedRuns] = useState<PlannedRun[]>([]);
   const [repeatMonFri, setRepeatMonFri] = useState<boolean>(false);
+  /**
+   * Where the saved route lands. Default = "loads" (customer portal) so
+   * planned routes show up on /portal/loads. Switch to "runs" only when
+   * the operator is committing the route to the dispatch planner.
+   */
+  const [saveTarget, setSaveTarget] = useState<"loads" | "runs">("loads");
   const [repeatWeeks, setRepeatWeeks] = useState<number>(1);
   const [repeatStartDate, setRepeatStartDate] = useState<string>(date);
   const [saving, setSaving] = useState(false);
@@ -622,7 +631,13 @@ export default function PlanPage() {
       });
     }
 
-    const result = await createRunsAction(newRuns);
+    // Route to the right table based on the operator's pick. createLoads
+    // and createRuns share the same payload shape so newRuns passes
+    // straight through.
+    const result =
+      saveTarget === "loads"
+        ? await createLoadsAction(newRuns)
+        : await createRunsAction(newRuns);
     setSaving(false);
     if (result.error) {
       showToast(result.error, "err");
@@ -632,10 +647,14 @@ export default function PlanPage() {
     setPlannedRuns((prev) =>
       [...newRuns, ...prev].sort((a, b) => (a.date < b.date ? -1 : 1)),
     );
+    const dest =
+      saveTarget === "loads"
+        ? "customer portal (Loads)"
+        : "dispatch planner (Runs)";
     showToast(
       newRuns.length === 1
-        ? `Run ${newRuns[0].jobNumber} saved.`
-        : `${newRuns.length} runs saved.`,
+        ? `Run ${newRuns[0].jobNumber} saved to ${dest}.`
+        : `${newRuns.length} runs saved to ${dest}.`,
     );
   }
 
@@ -1409,6 +1428,47 @@ export default function PlanPage() {
             <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
               Job numbers are assigned atomically when you save.
             </div>
+
+            {/* Where the saved route lands. Default = customer portal so
+                /portal/loads picks it up. Switch to dispatch planner only
+                when committing the route to the daily transport sheet. */}
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11.5 }}>Save to</label>
+              <div
+                className="row gap-8"
+                style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}
+              >
+                <button
+                  type="button"
+                  className={`btn sm ${saveTarget === "loads" ? "primary" : "ghost"}`}
+                  onClick={() => setSaveTarget("loads")}
+                  style={{ flex: 1 }}
+                >
+                  Customer portal
+                  <span
+                    className="muted"
+                    style={{ display: "block", fontSize: 10, marginTop: 2 }}
+                  >
+                    /portal/loads
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn sm ${saveTarget === "runs" ? "primary" : "ghost"}`}
+                  onClick={() => setSaveTarget("runs")}
+                  style={{ flex: 1 }}
+                >
+                  Dispatch planner
+                  <span
+                    className="muted"
+                    style={{ display: "block", fontSize: 10, marginTop: 2 }}
+                  >
+                    /runs
+                  </span>
+                </button>
+              </div>
+            </div>
+
             <button
               type="button"
               className="btn primary lg"

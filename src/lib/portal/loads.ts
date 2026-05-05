@@ -42,12 +42,24 @@ export function progressTuple(run: PlannedRun): { completed: number; total: numb
 }
 
 /**
- * Cheap ETA string for the table view — uses estimateFinishTime which is
- * postcode-distance based and does not call Mapbox. Good enough for a list.
- * The detail page should use buildEtaChain() for a Mapbox-backed answer.
+ * Customer-facing ETA at the delivery point.
+ *
+ * The customer wants to know "when will the truck be at me?" — that's the
+ * booked slot, NOT when the truck finishes the day back at base. Mirrors
+ * `chainedEta` for non-chained rows so the loads list and the load detail
+ * page show the same number for the same row:
+ *
+ *   1. bookingTime (the customer's booked arrival)
+ *   2. collectionTime (some parser paths land the booking here instead)
+ *   3. run.startTime (at least it's a baseline — "leaves at 08:00")
+ *
+ * Earlier this function piped through estimateFinishTime, which returns
+ * finish-back-at-base time and confused customers reading the page.
  */
 export function quickEta(run: PlannedRun): string {
-  return displayEta(run, estimateFinishTime(run).finishTime);
+  const booked = (run.bookingTime ?? run.collectionTime ?? "").trim();
+  if (booked) return booked;
+  return run.startTime || "—";
 }
 
 /**

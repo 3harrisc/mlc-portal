@@ -17,9 +17,8 @@
  */
 
 import type { PlannedRun } from "@/types/runs";
-import { computeChainedStarts, estimateFinishTime } from "@/lib/runDuration";
+import { computeChainedStarts } from "@/lib/runDuration";
 import { type LngLat } from "@/lib/geo-utils";
-import { displayEta } from "./loads";
 
 export interface ChainedInfo {
   chainedStartTime: string;
@@ -68,13 +67,36 @@ export function computeLoadChains(
  * Returns the same string format as `quickEta` so callers can swap them in
  * place without further conversion.
  */
+/**
+ * Customer-facing ETA at the delivery point.
+ *
+ * The dispatcher books a slot at the customer's site; that slot IS when the
+ * truck is expected to arrive. We surface that directly:
+ *
+ *   1. If this row is part of a chain, the chain's `chainedStartTime`
+ *      already represents arrival at the delivery (computeChainedStarts
+ *      treats either collectionTime or computed earliest-arrival as the
+ *      "chained start" — both are arrival times). Use it as-is.
+ *   2. Otherwise prefer the explicit booking time (bookingTime) — this is
+ *      the customer's booked slot.
+ *   3. Otherwise the row's collectionTime (the parser sometimes lands the
+ *      booking here when a row isn't tagged with bookingTime).
+ *   4. Otherwise the planned `startTime` — at minimum the customer can see
+ *      "the truck departs at 08:00".
+ *
+ * Critically: we do NOT pipe through estimateFinishTime any more. That
+ * function returns finish-back-at-base time (drive + service + return),
+ * which is dispatch info, not what the customer wants. If a row is
+ * actually running late, the chain math reflects it (`chainedStartTime`
+ * pushes later when leg N-1 ran long), and a future iteration can layer
+ * "running late vs current time" on top.
+ */
 export function chainedEta(
   run: PlannedRun,
   chained: ChainedInfo | undefined,
 ): string {
-  const computed = chained
-    ? estimateFinishTime({ ...run, startTime: chained.chainedStartTime })
-        .finishTime
-    : estimateFinishTime(run).finishTime;
-  return displayEta(run, computed || "");
+  if (chained?.chainedStartTime) return chained.chainedStartTime;
+  const booked = (run.bookingTime ?? run.collectionTime ?? "").trim();
+  if (booked) return booked;
+  return run.startTime || "—";
 }

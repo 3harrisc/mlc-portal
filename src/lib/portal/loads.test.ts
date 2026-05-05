@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { displayDestination } from "./loads";
+import { displayDestination, quickEta } from "./loads";
 import type { PlannedRun } from "@/types/runs";
 
 function run(p: Partial<PlannedRun>): PlannedRun {
@@ -26,6 +26,8 @@ function run(p: Partial<PlannedRun>): PlannedRun {
     rawText: p.rawText ?? "",
     runType: p.runType ?? "regular",
     runOrder: p.runOrder ?? null,
+    bookingTime: p.bookingTime,
+    collectionTime: p.collectionTime,
   };
 }
 
@@ -118,5 +120,47 @@ describe("displayDestination", () => {
       rawText: "BS20 7XN",
     });
     expect(displayDestination(r)).toBe("BS20 7XN");
+  });
+});
+
+describe("quickEta", () => {
+  // Customer ETA = arrival at delivery. The customer wants to see the
+  // booked slot, not the truck's finish-back-at-base time.
+  it("uses bookingTime when set", () => {
+    const r = run({ startTime: "08:00", bookingTime: "07:00" });
+    expect(quickEta(r)).toBe("07:00");
+  });
+
+  it("falls back to collectionTime when bookingTime is empty", () => {
+    const r = run({ startTime: "08:00", collectionTime: "11:30" });
+    expect(quickEta(r)).toBe("11:30");
+  });
+
+  it("prefers bookingTime over collectionTime when both present", () => {
+    const r = run({
+      startTime: "08:00",
+      bookingTime: "07:00",
+      collectionTime: "06:30",
+    });
+    expect(quickEta(r)).toBe("07:00");
+  });
+
+  it("falls back to startTime when no bookingTime or collectionTime", () => {
+    const r = run({ startTime: "08:00" });
+    expect(quickEta(r)).toBe("08:00");
+  });
+
+  it("returns em-dash when nothing is set", () => {
+    const r = run({ startTime: "" });
+    expect(quickEta(r)).toBe("—");
+  });
+
+  it("ignores whitespace-only bookingTime / collectionTime", () => {
+    const r = run({
+      startTime: "08:00",
+      bookingTime: "   ",
+      collectionTime: "   ",
+    });
+    expect(quickEta(r)).toBe("08:00");
   });
 });

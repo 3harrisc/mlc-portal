@@ -28,6 +28,7 @@ function load(p: Partial<PlannedRun>): PlannedRun {
     runType: p.runType ?? "regular",
     runOrder: p.runOrder ?? null,
     collectionTime: p.collectionTime,
+    bookingTime: p.bookingTime,
   };
 }
 
@@ -175,18 +176,40 @@ describe("computeLoadChains — coords parity with normalizePostcode", () => {
 });
 
 describe("chainedEta", () => {
-  it("returns plain quickEta when no chain info", () => {
-    const r = load({ startTime: "08:00", rawText: "B78 3HJ" });
-    expect(chainedEta(r, undefined)).not.toBe("");
-    expect(chainedEta(r, undefined)).not.toBe("—");
+  // Customer ETA = arrival at delivery, not finish-back-at-base. The chain
+  // already represents arrival, so chainedEta returns it verbatim.
+  it("returns the chain's chainedStartTime when chained", () => {
+    const r = load({ id: "leg2", startTime: "08:00" });
+    const chained = {
+      chainedStartTime: "11:30",
+      chainedFromPostcode: "B78 3HJ",
+    };
+    expect(chainedEta(r, chained)).toBe("11:30");
   });
 
-  it("computes ETA from the chained start, not the booked start", () => {
-    const r = load({ id: "leg2", startTime: "06:00", rawText: "B78 3HJ" });
-    const chained = { chainedStartTime: "14:00", chainedFromPostcode: "B78 3HJ" };
-    const earlyEta = chainedEta(r, undefined); // from 06:00
-    const chainedFromLater = chainedEta(r, chained); // from 14:00
-    // Chained ETA should be later than the eta computed from the booked time.
-    expect(chainedFromLater.localeCompare(earlyEta)).toBeGreaterThan(0);
+  it("falls back to bookingTime when not chained", () => {
+    const r = load({ startTime: "08:00", bookingTime: "07:00" });
+    expect(chainedEta(r, undefined)).toBe("07:00");
+  });
+
+  it("falls back to collectionTime when no bookingTime", () => {
+    const r = load({ startTime: "08:00", collectionTime: "07:30" });
+    expect(chainedEta(r, undefined)).toBe("07:30");
+  });
+
+  it("falls back to startTime when nothing else is set", () => {
+    const r = load({ startTime: "08:00" });
+    expect(chainedEta(r, undefined)).toBe("08:00");
+  });
+
+  it("ignores bookingTime when a chain is present (chain wins)", () => {
+    // The chain already accounts for booking floors via computeChainedStarts,
+    // so chainedEta trusts the chain output and doesn't second-guess it.
+    const r = load({ startTime: "08:00", bookingTime: "07:00" });
+    const chained = {
+      chainedStartTime: "12:27",
+      chainedFromPostcode: "B78 3HJ",
+    };
+    expect(chainedEta(r, chained)).toBe("12:27");
   });
 });

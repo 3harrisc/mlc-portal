@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { displayDestination, quickEta } from "./loads";
+import { displayDestination, legSiteTimes, quickEta } from "./loads";
 import type { PlannedRun } from "@/types/runs";
 
 function run(p: Partial<PlannedRun>): PlannedRun {
@@ -28,6 +28,9 @@ function run(p: Partial<PlannedRun>): PlannedRun {
     runOrder: p.runOrder ?? null,
     bookingTime: p.bookingTime,
     collectionTime: p.collectionTime,
+    completedMeta: p.completedMeta,
+    progress: p.progress,
+    completedStopIndexes: p.completedStopIndexes,
   };
 }
 
@@ -162,5 +165,122 @@ describe("quickEta", () => {
       collectionTime: "   ",
     });
     expect(quickEta(r)).toBe("08:00");
+  });
+});
+
+describe("legSiteTimes", () => {
+  // The cron at /api/cron/update-progress writes arrivedISO when the
+  // vehicle enters the radius and atISO when it leaves. These tests lock
+  // in how the customer-portal helper reads that data back so we don't
+  // accidentally regress arrived/departed display — customers use those
+  // timestamps for their on-time-arrival KPIs.
+
+  // Pin a deterministic local timezone-independent helper. We compare on
+  // the HH:MM segment only, which `toTimeString().slice(0, 5)` returns in
+  // the runtime's local tz — fine for these tests because we feed in ISO
+  // strings whose local rendering is stable across the vitest run.
+  function makeIso(hours: number, minutes: number): string {
+    const d = new Date();
+    d.setHours(hours, minutes, 0, 0);
+    return d.toISOString();
+  }
+
+  function expectedHHMM(hours: number, minutes: number): string {
+    const d = new Date();
+    d.setHours(hours, minutes, 0, 0);
+    return d.toTimeString().slice(0, 5);
+  }
+
+  it("returns null fields when stopIndex is null", () => {
+    const r = run({});
+    const t = legSiteTimes(r, null);
+    expect(t).toEqual({
+      arrivedAt: null,
+      departedAt: null,
+      onSite: false,
+      onSiteSince: null,
+    });
+  });
+
+  it("returns null fields when no completed_meta entry exists", () => {
+    const r = run({ completedMeta: {} });
+    const t = legSiteTimes(r, 0);
+    expect(t.arrivedAt).toBeNull();
+    expect(t.departedAt).toBeNull();
+    expect(t.onSite).toBe(false);
+  });
+
+  it("formats arrivedISO and atISO into HH:MM", () => {
+    const r = run({
+      completedMeta: {
+        0: {
+          arrivedISO: makeIso(10, 23),
+          atISO: makeIso(11, 8),
+          by: "auto",
+        },
+      },
+    });
+    const t = legSiteTimes(r, 0);
+    expect(t.arrivedAt).toBe(expectedHHMM(10, 23));
+    expect(t.departedAt).toBe(expectedHHMM(11, 8));
+    expect(t.onSite).toBe(false);
+  });
+
+  it("flags on-site when progress.onSiteIdx matches", () => {
+    const since = Date.now() - 5 * 60_000;
+    const r = run({
+      completedMeta: {
+        0: { arrivedISO: makeIso(10, 23), by: "auto" },
+      },
+      progress: {
+        completedIdx: [],
+        onSiteIdx: 0,
+        onSiteSinceMs: since,
+        lastInside: true,
+      },
+    });
+    const t = legSiteTimes(r, 0);
+    expect(t.onSite).toBe(true);
+    expect(t.onSiteSince).not.toBeNull();
+    expect(t.arrivedAt).toBe(expectedHHMM(10, 23));
+    expect(t.departedAt).toBeNull();
+  });
+
+  it("does NOT flag on-site for a different stop's index", () => {
+    const r = run({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: 2,
+        onSiteSinceMs: Date.now(),
+        lastInside: true,
+      },
+    });
+    expect(legSiteTimes(r, 0).onSite).toBe(false);
+    expect(legSiteTimes(r, 2).onSite).toBe(true);
+  });
+
+  it("clears onSiteSince when not on-site", () => {
+    const r = run({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: 1,
+        onSiteSinceMs: Date.now(),
+        lastInside: true,
+      },
+    });
+    // Stop 0 isn't the current onSite stop -> onSiteSince should be null
+    // even though progress carries a timestamp for the OTHER stop.
+    expect(legSiteTimes(r, 0).onSiteSince).toBeNull();
+  });
+
+  it("handles malformed ISO strings gracefully", () => {
+    const r = run({
+      completedMeta: {
+        0: { arrivedISO: "not-a-date", atISO: "also-bad", by: "auto" },
+      },
+    });
+    const t = legSiteTimes(r, 0);
+    expect(t.arrivedAt).toBeNull();
+    expect(t.departedAt).toBeNull();
   });
 });

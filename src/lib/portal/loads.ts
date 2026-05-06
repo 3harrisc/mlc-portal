@@ -137,6 +137,72 @@ export function displayDestination(run: PlannedRun): string {
   return run.toPostcode ?? "";
 }
 
+/**
+ * Per-stop arrival / departure / on-site state for the customer portal.
+ *
+ * Customers use the arrived/departed times for their own internal KPIs
+ * (on-time arrival rates, dwell time at the gate, etc.), so this is a
+ * core piece of customer-portal data, not just internal dispatch info.
+ *
+ * The cron at /api/cron/update-progress writes:
+ *   * `completed_meta[idx].arrivedISO`  — when the vehicle entered the
+ *     postcode radius for a stop.
+ *   * `completed_meta[idx].atISO`       — when the vehicle DEPARTED that
+ *     radius (the stop is then "done").
+ *   * `progress.onSiteIdx`              — the stop the vehicle is
+ *     currently inside the radius of.
+ *   * `progress.onSiteSinceMs`          — unix-ms timestamp of arrival
+ *     for the current on-site stop.
+ *
+ * This helper wraps that into a simple per-stop view-model.
+ */
+export interface SiteTimes {
+  /** "HH:MM" when the vehicle arrived at this stop, or null. */
+  arrivedAt: string | null;
+  /** "HH:MM" when the vehicle departed this stop, or null. */
+  departedAt: string | null;
+  /** True when the vehicle is currently inside this stop's radius. */
+  onSite: boolean;
+  /** "HH:MM" when the on-site dwell started (only set when onSite). */
+  onSiteSince: string | null;
+}
+
+const EMPTY_SITE_TIMES: SiteTimes = {
+  arrivedAt: null,
+  departedAt: null,
+  onSite: false,
+  onSiteSince: null,
+};
+
+function isoToHHMM(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toTimeString().slice(0, 5);
+}
+
+function msToHHMM(ms: number | null | undefined): string | null {
+  if (ms == null) return null;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toTimeString().slice(0, 5);
+}
+
+export function legSiteTimes(
+  run: PlannedRun,
+  stopIndex: number | null | undefined,
+): SiteTimes {
+  if (stopIndex == null) return EMPTY_SITE_TIMES;
+  const meta = (run.completedMeta ?? {})[stopIndex];
+  const onSite = run.progress?.onSiteIdx === stopIndex;
+  return {
+    arrivedAt: isoToHHMM(meta?.arrivedISO),
+    departedAt: isoToHHMM(meta?.atISO),
+    onSite,
+    onSiteSince: onSite ? msToHHMM(run.progress?.onSiteSinceMs ?? null) : null,
+  };
+}
+
 /** "25 Apr" — short British date for table cells. */
 export function shortDate(iso: string): string {
   if (!iso) return "";

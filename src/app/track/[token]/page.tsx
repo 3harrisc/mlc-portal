@@ -4,7 +4,7 @@ import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { parseStops, normalizePostcode } from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
-import { deriveStatus, quickEta } from "@/lib/portal/loads";
+import { deriveStatus, legSiteTimes, quickEta } from "@/lib/portal/loads";
 import StatusPill from "@/components/portal/StatusPill";
 import BrandMark from "@/components/portal/BrandMark";
 import PortalMap, {
@@ -205,6 +205,149 @@ export default async function PublicTrackPage({ params }: PageProps) {
           <PortalMap pins={mapPins} routes={mapRoutes} height="100%" />
         </div>
       </div>
+
+      {/* Stops with arrived / departed / on-site times. The data here is
+          what customers use for their on-time-arrival KPIs, so it has to
+          render on the public share view as well as the authenticated
+          /portal/loads/[id] page. */}
+      {stops.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-header">
+            <h3>Stops</h3>
+            <span className="muted" style={{ fontSize: 11 }}>
+              · {completedIdx.size}/{stops.length} done
+            </span>
+          </div>
+          <div className="card-body">
+            <ol
+              style={{
+                listStyle: "none",
+                margin: 0,
+                padding: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              {stops.map((pc, i) => {
+                const done = completedIdx.has(i);
+                const site = legSiteTimes(run, i);
+                return (
+                  <li
+                    key={`${pc}-${i}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "8px 10px",
+                      border: site.onSite
+                        ? "1px solid var(--mlc-blue)"
+                        : "1px solid var(--line)",
+                      borderRadius: 6,
+                      background: site.onSite
+                        ? "var(--mlc-blue-50, #eef4ff)"
+                        : done
+                          ? "var(--ok-bg, #e8f5e9)"
+                          : "var(--surface-alt, #fafafa)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: "50%",
+                        background: site.onSite
+                          ? "var(--mlc-blue)"
+                          : done
+                            ? "var(--ok)"
+                            : "var(--ink-500)",
+                        color: "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {i + 1}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="bold mono" style={{ fontSize: 12.5 }}>
+                        {pc}
+                      </div>
+                      {(site.arrivedAt ||
+                        site.departedAt ||
+                        site.onSite) && (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 12,
+                            flexWrap: "wrap",
+                            marginTop: 4,
+                            fontSize: 11,
+                          }}
+                        >
+                          {site.arrivedAt && (
+                            <span className="mono">
+                              <span className="muted">Arrived</span>{" "}
+                              <span className="bold">{site.arrivedAt}</span>
+                            </span>
+                          )}
+                          {site.departedAt && (
+                            <span className="mono">
+                              <span className="muted">Departed</span>{" "}
+                              <span className="bold">{site.departedAt}</span>
+                            </span>
+                          )}
+                          {site.onSite && !site.departedAt && site.onSiteSince && (
+                            <span
+                              className="mono"
+                              style={{ color: "var(--mlc-blue)" }}
+                            >
+                              <span className="muted">On site since</span>{" "}
+                              <span className="bold">{site.onSiteSince}</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {site.onSite ? (
+                      <span
+                        style={{
+                          background: "var(--mlc-blue)",
+                          color: "#fff",
+                          padding: "2px 8px",
+                          borderRadius: 99,
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        On Site
+                      </span>
+                    ) : done ? (
+                      <span
+                        style={{
+                          background: "var(--ok)",
+                          color: "#fff",
+                          padding: "2px 8px",
+                          borderRadius: 99,
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Done
+                      </span>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </div>
+      )}
 
       <footer
         style={{

@@ -29,7 +29,12 @@ import PortalMap, {
 } from "@/components/portal/PortalMap";
 import ShareLinkPanel from "@/components/portal/ShareLinkPanel";
 import { useToast } from "@/components/portal/ToastContext";
-import { deriveStatus, displayDestination, quickEta } from "@/lib/portal/loads";
+import {
+  deriveStatus,
+  displayDestination,
+  legSiteTimes,
+  quickEta,
+} from "@/lib/portal/loads";
 import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
 
 interface TimelineEvent {
@@ -526,6 +531,10 @@ function LoadDetailView({
                   const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
                   const isOrigin = leg.kind === "origin";
                   const isReturn = leg.kind === "return";
+                  // Arrived / departed / on-site state — surfaced for every
+                  // real (non-synthetic) leg so customers can read off their
+                  // KPI fields (on-time arrival, dwell time, etc.).
+                  const site = legSiteTimes(run, leg.stopIndex ?? null);
                   return (
                     <li
                       key={`${leg.postcode}-${i}-${leg.kind}`}
@@ -534,13 +543,17 @@ function LoadDetailView({
                         alignItems: "center",
                         gap: 12,
                         padding: "8px 10px",
-                        border: "1px solid var(--line)",
+                        border: site.onSite
+                          ? "1px solid var(--mlc-blue)"
+                          : "1px solid var(--line)",
                         borderRadius: 6,
-                        background: done
-                          ? "var(--ok-bg)"
-                          : isOrigin
-                            ? "var(--mlc-blue-50)"
-                            : "var(--surface-alt)",
+                        background: site.onSite
+                          ? "var(--mlc-blue-50)"
+                          : done
+                            ? "var(--ok-bg)"
+                            : isOrigin
+                              ? "var(--mlc-blue-50)"
+                              : "var(--surface-alt)",
                       }}
                     >
                       <div
@@ -548,13 +561,15 @@ function LoadDetailView({
                           width: 22,
                           height: 22,
                           borderRadius: "50%",
-                          background: done
-                            ? "var(--ok)"
-                            : isOrigin
-                              ? "var(--mlc-blue)"
-                              : isReturn
-                                ? "var(--ink-500)"
-                                : "var(--mlc-red)",
+                          background: site.onSite
+                            ? "var(--mlc-blue)"
+                            : done
+                              ? "var(--ok)"
+                              : isOrigin
+                                ? "var(--mlc-blue)"
+                                : isReturn
+                                  ? "var(--ink-500)"
+                                  : "var(--mlc-red)",
                           color: "#fff",
                           display: "flex",
                           alignItems: "center",
@@ -573,13 +588,70 @@ function LoadDetailView({
                         <div className="muted mono" style={{ fontSize: 11 }}>
                           {leg.postcode} · {leg.label}
                         </div>
+                        {/* Arrived / departed / on-site times — only shown
+                            for real stops with at least one timestamp. */}
+                        {(site.arrivedAt || site.departedAt || site.onSite) && (
+                          <div
+                            className="row gap-12"
+                            style={{ marginTop: 4, flexWrap: "wrap", fontSize: 11 }}
+                          >
+                            {site.arrivedAt && (
+                              <span className="mono">
+                                <span className="muted">Arrived</span>{" "}
+                                <span className="bold">{site.arrivedAt}</span>
+                              </span>
+                            )}
+                            {site.departedAt && (
+                              <span className="mono">
+                                <span className="muted">Departed</span>{" "}
+                                <span className="bold">{site.departedAt}</span>
+                              </span>
+                            )}
+                            {site.onSite && !site.departedAt && site.onSiteSince && (
+                              <span
+                                className="mono"
+                                style={{ color: "var(--mlc-blue)" }}
+                              >
+                                <span className="muted">On site since</span>{" "}
+                                <span className="bold">{site.onSiteSince}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {done && (
+                      {site.onSite ? (
+                        <span
+                          className="pill"
+                          style={{
+                            background: "var(--mlc-blue)",
+                            color: "#fff",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 99,
+                            fontSize: 10.5,
+                            fontWeight: 600,
+                          }}
+                        >
+                          <span
+                            className="dot"
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: "#fff",
+                              animation: "pulse 1.5s ease-in-out infinite",
+                            }}
+                          />
+                          On Site
+                        </span>
+                      ) : done ? (
                         <span className="pill delivered">
                           <span className="dot" />
                           Done
                         </span>
-                      )}
+                      ) : null}
                     </li>
                   );
                 })}
@@ -836,32 +908,53 @@ function buildTimeline(
   plan.legs.forEach((leg, i) => {
     const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
     const m = leg.stopIndex != null ? meta[leg.stopIndex] : undefined;
-    const at = m?.atISO
-      ? formatLocalIso(m.atISO)
-      : `${run.date} ${run.startTime || "00:00"}`;
+    const onSite =
+      leg.stopIndex != null && run.progress?.onSiteIdx === leg.stopIndex;
+    const fallbackAt = `${run.date} ${run.startTime || "00:00"}`;
+
     if (done) {
+      // Emit two events: arrival, then departure. Keeps the timeline
+      // honest for customer KPI audits — both timestamps live in
+      // completed_meta, no point hiding the arrival.
+      if (m?.arrivedISO) {
+        events.push({
+          at: formatLocalIso(m.arrivedISO),
+          title: `Arrived at ${leg.postcode}`,
+          kind: "ok",
+        });
+      }
       events.push({
-        at,
-        title: `${leg.label} completed at ${leg.postcode}`,
+        at: m?.atISO ? formatLocalIso(m.atISO) : fallbackAt,
+        title: `Departed ${leg.postcode} · ${leg.label} complete`,
         meta: m?.by ? `Marked by ${m.by}` : undefined,
         kind: "ok",
       });
+    } else if (onSite) {
+      // Live "on site" — vehicle inside the radius but not yet departed.
+      const since = run.progress?.onSiteSinceMs
+        ? new Date(run.progress.onSiteSinceMs).toISOString()
+        : null;
+      events.push({
+        at: since ? formatLocalIso(since) : fallbackAt,
+        title: `On site at ${leg.postcode}`,
+        kind: "current",
+      });
     } else if (leg.kind === "origin") {
       events.push({
-        at,
+        at: fallbackAt,
         title: `Start: ${leg.label} at ${leg.postcode}`,
         kind: "info",
       });
     } else if (leg.kind === "return") {
       events.push({
-        at,
+        at: fallbackAt,
         title: `Return to base at ${leg.postcode}`,
         kind: "info",
       });
     } else {
       const isCurrent = i === nextDropLegIdx && status !== "delivered";
       events.push({
-        at,
+        at: fallbackAt,
         title: isCurrent
           ? `Heading to ${leg.postcode}`
           : `Scheduled: ${leg.label} at ${leg.postcode}`,

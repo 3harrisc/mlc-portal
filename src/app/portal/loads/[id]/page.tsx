@@ -252,6 +252,7 @@ function LoadDetailView({
   async function handleSaveEdits(edits: LoadEdits) {
     setEditSaving(true);
     const res = await updateLoad(run.id, {
+      date: edits.date,
       runType: edits.runType,
       startTime: edits.startTime,
       collectionTime: edits.collectionTime || null,
@@ -268,8 +269,10 @@ function LoadDetailView({
       showToast(`Couldn't save: ${res.error}`, "err");
       return;
     }
+    const dateChanged = edits.date !== run.date;
     onRunChange({
       ...run,
+      date: edits.date,
       runType: edits.runType,
       startTime: edits.startTime,
       collectionTime: edits.collectionTime || undefined,
@@ -281,18 +284,20 @@ function LoadDetailView({
       serviceMins: edits.serviceMins,
       includeBreaks: edits.includeBreaks,
     });
+    // Refetch siblings against the (possibly new) date so chained-start
+    // computation reflects the load's new place in the day's lineup.
     if (run.vehicle?.trim()) {
       const supabase = createClient();
       const { data: sibRows } = await supabase
         .from("loads")
         .select("*")
-        .eq("date", run.date)
+        .eq("date", edits.date)
         .eq("vehicle", run.vehicle);
       if (sibRows) onSiblingsChange(sibRows.map(rowToRun));
     }
     setEditSaving(false);
     setEditOpen(false);
-    showToast("Load updated");
+    showToast(dateChanged ? `Load moved to ${edits.date}` : "Load updated");
   }
 
   const handleDelete = () => {

@@ -22,6 +22,7 @@ import type { PlannedRun, RunType } from "@/types/runs";
 import Icon from "./Icon";
 
 export interface LoadEdits {
+  date: string;
   runType: RunType;
   startTime: string;
   collectionDate: string;
@@ -157,6 +158,20 @@ export default function LoadEditModal({
                 {isBackload
                   ? "Backload: truck goes empty to the pickup, then delivers."
                   : "Regular: truck loads at customer base / collection point, then delivers."}
+              </span>
+            </Field>
+
+            <Field label="Date">
+              <input
+                type="date"
+                value={edits.date}
+                onChange={(e) => update("date", e.target.value)}
+                disabled={saving}
+                className="input"
+                style={{ height: 32 }}
+              />
+              <span className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                Move this run to a different day.
               </span>
             </Field>
 
@@ -328,6 +343,7 @@ function Field({
 
 function seedFromRun(run: PlannedRun): LoadEdits {
   return {
+    date: run.date ?? "",
     runType: run.runType ?? "regular",
     startTime: run.startTime ?? "08:00",
     collectionDate: run.collectionDate ?? "",

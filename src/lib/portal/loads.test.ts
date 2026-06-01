@@ -6,7 +6,14 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { displayDestination, legSiteTimes, quickEta } from "./loads";
+import {
+  deliveryEta,
+  displayDestination,
+  legSiteTimes,
+  quickEta,
+} from "./loads";
+import { normalizePostcode } from "@/lib/postcode-utils";
+import { timeToMinutes } from "@/lib/time-utils";
 import type { PlannedRun } from "@/types/runs";
 
 function run(p: Partial<PlannedRun>): PlannedRun {
@@ -165,6 +172,109 @@ describe("quickEta", () => {
       collectionTime: "   ",
     });
     expect(quickEta(r)).toBe("08:00");
+  });
+});
+
+describe("deliveryEta", () => {
+  // The public shipment tracker shows the consignee at the DROP "when will
+  // the lorry be at me?". Unlike quickEta it must never surface the
+  // collection time, and once a live position is known it projects a real
+  // ETA to the next outstanding stop.
+
+  // A winter date so UTC == UK local (no BST offset) — keeps the
+  // minutes-of-day maths deterministic regardless of the runner's tz.
+  function nowAt(hhmm: string): Date {
+    return new Date(`2026-01-15T${hhmm}:00Z`);
+  }
+  const coordsFor = (entries: Array<[string, { lat: number; lng: number }]>) =>
+    new Map(entries.map(([pc, c]) => [normalizePostcode(pc), c]));
+
+  it("ignores collectionTime — never shows the collection slot as the ETA", () => {
+    // The reported bug: an 08:30 'ETA' that was really the 08:30 collection.
+    const r = run({
+      startTime: "08:30",
+      collectionTime: "08:30",
+      rawText: "GU11 2HL",
+    });
+    // No live position, no delivery booking -> baseline startTime, NOT
+    // the collectionTime (which here happens to share the value, so assert
+    // the resolution path explicitly via a differing startTime below).
+    expect(deliveryEta(r)).toBe("08:30");
+
+    const r2 = run({
+      startTime: "06:00",
+      collectionTime: "08:30",
+      rawText: "GU11 2HL",
+    });
+    expect(deliveryEta(r2)).toBe("06:00");
+  });
+
+  it("uses the booked delivery slot (bookingTime) when no live position", () => {
+    const r = run({ startTime: "06:00", bookingTime: "14:00", rawText: "GU11 2HL" });
+    expect(deliveryEta(r)).toBe("14:00");
+  });
+
+  it("falls back to startTime when nothing else is set", () => {
+    const r = run({ startTime: "07:15", rawText: "GU11 2HL" });
+    expect(deliveryEta(r)).toBe("07:15");
+  });
+
+  it("projects a live ETA from the current position to the next stop", () => {
+    const r = run({ rawText: "GU11 2HL" });
+    // Target ~0.5° north of the truck — a real (non-zero) distance.
+    const truckPos = { lat: 51.0, lng: -2.0 };
+    const coords = coordsFor([["GU11 2HL", { lat: 51.5, lng: -2.0 }]]);
+    const out = deliveryEta(r, { truckPos, coords, now: nowAt("09:00") });
+    // Should be a clock time strictly after 09:00 (travel time added).
+    const mins = timeToMinutes(out);
+    expect(mins).not.toBeNull();
+    expect(mins!).toBeGreaterThan(timeToMinutes("09:00")!);
+  });
+
+  it("returns 'now' when the truck is effectively at the stop", () => {
+    const r = run({ rawText: "GU11 2HL" });
+    const at = { lat: 51.2, lng: -1.0 };
+    const coords = coordsFor([["GU11 2HL", at]]);
+    expect(deliveryEta(r, { truckPos: at, coords, now: nowAt("10:30") })).toBe("10:30");
+  });
+
+  it("floors the live ETA at the booked slot (never promises early)", () => {
+    const r = run({ bookingTime: "13:00", rawText: "GU11 2HL" });
+    const at = { lat: 51.2, lng: -1.0 };
+    const coords = coordsFor([["GU11 2HL", at]]);
+    // Truck is at the stop and it's only 10:30, but booked for 13:00.
+    expect(deliveryEta(r, { truckPos: at, coords, now: nowAt("10:30") })).toBe("13:00");
+  });
+
+  it("lets the live ETA move past the booked slot when running late", () => {
+    const r = run({ bookingTime: "11:00", rawText: "GU11 2HL" });
+    const at = { lat: 51.2, lng: -1.0 };
+    const coords = coordsFor([["GU11 2HL", at]]);
+    // Already 12:00 and at the stop -> show 12:00, not the passed 11:00 slot.
+    expect(deliveryEta(r, { truckPos: at, coords, now: nowAt("12:00") })).toBe("12:00");
+  });
+
+  it("projects to the next OUTSTANDING stop on a multi-drop run", () => {
+    const r = run({
+      rawText: "BS1 1AA\nGU11 2HL",
+      completedStopIndexes: [0],
+    });
+    const at = { lat: 51.2, lng: -1.0 };
+    // Only the second stop matters now; truck sitting on it -> 'now'.
+    const coords = coordsFor([
+      ["BS1 1AA", { lat: 50.0, lng: -3.0 }],
+      ["GU11 2HL", at],
+    ]);
+    expect(deliveryEta(r, { truckPos: at, coords, now: nowAt("14:45") })).toBe("14:45");
+  });
+
+  it("falls back to the booked slot when stop coords are missing", () => {
+    const r = run({ bookingTime: "15:30", rawText: "GU11 2HL" });
+    const truckPos = { lat: 51.0, lng: -2.0 };
+    // coords map has no entry for the target -> can't project.
+    expect(deliveryEta(r, { truckPos, coords: new Map(), now: nowAt("09:00") })).toBe(
+      "15:30",
+    );
   });
 });
 

@@ -1,7 +1,13 @@
 import type { PlannedRun } from "@/types/runs";
 import type { LoadStatus } from "@/components/portal/StatusPill";
-import { extractPostcode, parseStops } from "@/lib/postcode-utils";
+import {
+  extractPostcode,
+  normalizePostcode,
+  parseStops,
+} from "@/lib/postcode-utils";
 import { estimateFinishTime } from "@/lib/runDuration";
+import { haversineKm } from "@/lib/geo-utils";
+import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
 
 /**
  * Derives the customer-portal status enum from a PlannedRun.
@@ -59,6 +65,100 @@ export function progressTuple(run: PlannedRun): { completed: number; total: numb
 export function quickEta(run: PlannedRun): string {
   const booked = (run.bookingTime ?? run.collectionTime ?? "").trim();
   if (booked) return booked;
+  return run.startTime || "—";
+}
+
+// HGV road-distance assumptions. These mirror the inter-run estimate in
+// runDuration.ts (they're module-private there). Keep them in sync if the
+// chaining maths is ever retuned.
+const HGV_AVG_SPEED_KPH = 60;
+const ROAD_FACTOR = 1.3; // straight-line × this ≈ road distance
+
+/**
+ * Current time-of-day in minutes-since-midnight, in UK (Europe/London) time.
+ *
+ * The booked slots we compare against are UK local "HH:MM" strings, but the
+ * tracker renders server-side and Vercel functions run in UTC. Reading
+ * `new Date().getHours()` would therefore be an hour out during BST. We pin
+ * the conversion to Europe/London so the live ETA lines up with the booked
+ * times regardless of where the function executes.
+ */
+function ukMinutesOfDay(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(now);
+  const hh = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const mm = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return hh * 60 + mm;
+}
+
+export interface DeliveryEtaContext {
+  /** Live vehicle position, if known. */
+  truckPos?: { lat: number; lng: number } | null;
+  /** Stop coordinates, keyed by `normalizePostcode(stop)`. */
+  coords?: Map<string, { lat: number; lng: number }>;
+  /** "Now" — injectable for tests. Defaults to the current time. */
+  now?: Date;
+}
+
+/**
+ * Customer-facing ETA to the *delivery* point, for the public shipment tracker.
+ *
+ * `quickEta` answers "what's the booked slot?" — fine for the loads list, but
+ * on the shared tracker the recipient is the consignee waiting at the DROP and
+ * wants "when will the lorry be at me?". For a collect-then-deliver job
+ * `quickEta` can surface the COLLECTION time (run.collectionTime), which reads
+ * as a nonsense delivery ETA once the collection slot has passed (the bug the
+ * customer reported: an 08:30 ETA that was really the 08:30 collection).
+ *
+ * Resolution order:
+ *   1. Live projection — when we have a vehicle position and coords for the
+ *      next outstanding stop, project arrival from NOW using the same HGV
+ *      road-distance estimate the chaining maths uses. Floored at the booked
+ *      delivery slot so we never promise an arrival earlier than booked.
+ *   2. The booked delivery slot (bookingTime) on its own.
+ *   3. run.startTime as a baseline, so we degrade gracefully rather than blank.
+ *
+ * Deliberately ignores `collectionTime` — that's the arrival at the COLLECTION
+ * point, never the delivery ETA.
+ */
+export function deliveryEta(run: PlannedRun, ctx: DeliveryEtaContext = {}): string {
+  const stops = parseStops(run.rawText);
+  const completed = new Set([
+    ...(run.completedStopIndexes ?? []),
+    ...(run.progress?.completedIdx ?? []),
+  ]);
+  // The stop the customer is still waiting on (first uncompleted).
+  const targetIdx = stops.findIndex((_, i) => !completed.has(i));
+
+  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
+
+  // 1. Live projection from the current vehicle position.
+  const { truckPos, coords, now = new Date() } = ctx;
+  if (targetIdx !== -1 && truckPos && coords) {
+    const target = coords.get(normalizePostcode(stops[targetIdx]));
+    if (target) {
+      const straightKm = haversineKm(
+        { lat: truckPos.lat, lng: truckPos.lng },
+        { lat: target.lat, lng: target.lng },
+      );
+      const travelMins = Math.round(
+        ((straightKm * ROAD_FACTOR) / HGV_AVG_SPEED_KPH) * 60,
+      );
+      let etaMins = ukMinutesOfDay(now) + travelMins;
+      // Don't promise earlier than the booked slot.
+      if (bookedMins != null) etaMins = Math.max(etaMins, bookedMins);
+      return minutesToTime(etaMins);
+    }
+  }
+
+  // 2. Booked delivery slot.
+  if (bookedMins != null) return (run.bookingTime ?? "").trim();
+
+  // 3. Baseline.
   return run.startTime || "—";
 }
 

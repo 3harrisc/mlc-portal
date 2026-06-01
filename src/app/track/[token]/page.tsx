@@ -4,7 +4,7 @@ import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { parseStops, normalizePostcode } from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
-import { deriveStatus, legSiteTimes, quickEta } from "@/lib/portal/loads";
+import { deriveStatus, legSiteTimes, deliveryEta } from "@/lib/portal/loads";
 import StatusPill from "@/components/portal/StatusPill";
 import BrandMark from "@/components/portal/BrandMark";
 import PortalMap, {
@@ -171,7 +171,9 @@ export default async function PublicTrackPage({ params }: PageProps) {
             <div className="stat-cell">
               <div className="l">ETA</div>
               <div className="v mono">
-                {status === "delivered" ? "Delivered" : quickEta(run)}
+                {status === "delivered"
+                  ? "Delivered"
+                  : deliveryEta(run, { truckPos, coords })}
               </div>
             </div>
             <div className="stat-cell">

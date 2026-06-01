@@ -105,6 +105,51 @@ export interface DeliveryEtaContext {
 }
 
 /**
+ * ETA projected from the live vehicle position to the next *outstanding* stop,
+ * or `null` when we can't compute one (no live fix, no coords for that stop,
+ * or every stop already done).
+ *
+ * Uses the same HGV road-distance estimate as the chaining maths (straight-line
+ * × road factor ÷ average speed) and floors the result at the booked delivery
+ * slot, so we never promise an arrival earlier than the customer is booked in.
+ *
+ * Pulled out of `deliveryEta` so callers that already have a richer fallback
+ * (e.g. the admin load detail page, which chains stacked loads) can prefer the
+ * live number and keep their own fallback for the not-yet-moving case.
+ */
+export function liveEtaToNextStop(
+  run: PlannedRun,
+  ctx: DeliveryEtaContext = {},
+): string | null {
+  const { truckPos, coords, now = new Date() } = ctx;
+  if (!truckPos || !coords) return null;
+
+  const stops = parseStops(run.rawText);
+  const completed = new Set([
+    ...(run.completedStopIndexes ?? []),
+    ...(run.progress?.completedIdx ?? []),
+  ]);
+  const targetIdx = stops.findIndex((_, i) => !completed.has(i));
+  if (targetIdx === -1) return null;
+
+  const target = coords.get(normalizePostcode(stops[targetIdx]));
+  if (!target) return null;
+
+  const straightKm = haversineKm(
+    { lat: truckPos.lat, lng: truckPos.lng },
+    { lat: target.lat, lng: target.lng },
+  );
+  const travelMins = Math.round(
+    ((straightKm * ROAD_FACTOR) / HGV_AVG_SPEED_KPH) * 60,
+  );
+  let etaMins = ukMinutesOfDay(now) + travelMins;
+  // Don't promise earlier than the booked slot.
+  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
+  if (bookedMins != null) etaMins = Math.max(etaMins, bookedMins);
+  return minutesToTime(etaMins);
+}
+
+/**
  * Customer-facing ETA to the *delivery* point, for the public shipment tracker.
  *
  * `quickEta` answers "what's the booked slot?" — fine for the loads list, but
@@ -115,10 +160,8 @@ export interface DeliveryEtaContext {
  * customer reported: an 08:30 ETA that was really the 08:30 collection).
  *
  * Resolution order:
- *   1. Live projection — when we have a vehicle position and coords for the
- *      next outstanding stop, project arrival from NOW using the same HGV
- *      road-distance estimate the chaining maths uses. Floored at the booked
- *      delivery slot so we never promise an arrival earlier than booked.
+ *   1. Live projection from the current vehicle position (see
+ *      `liveEtaToNextStop`).
  *   2. The booked delivery slot (bookingTime) on its own.
  *   3. run.startTime as a baseline, so we degrade gracefully rather than blank.
  *
@@ -126,36 +169,12 @@ export interface DeliveryEtaContext {
  * point, never the delivery ETA.
  */
 export function deliveryEta(run: PlannedRun, ctx: DeliveryEtaContext = {}): string {
-  const stops = parseStops(run.rawText);
-  const completed = new Set([
-    ...(run.completedStopIndexes ?? []),
-    ...(run.progress?.completedIdx ?? []),
-  ]);
-  // The stop the customer is still waiting on (first uncompleted).
-  const targetIdx = stops.findIndex((_, i) => !completed.has(i));
-
-  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
-
   // 1. Live projection from the current vehicle position.
-  const { truckPos, coords, now = new Date() } = ctx;
-  if (targetIdx !== -1 && truckPos && coords) {
-    const target = coords.get(normalizePostcode(stops[targetIdx]));
-    if (target) {
-      const straightKm = haversineKm(
-        { lat: truckPos.lat, lng: truckPos.lng },
-        { lat: target.lat, lng: target.lng },
-      );
-      const travelMins = Math.round(
-        ((straightKm * ROAD_FACTOR) / HGV_AVG_SPEED_KPH) * 60,
-      );
-      let etaMins = ukMinutesOfDay(now) + travelMins;
-      // Don't promise earlier than the booked slot.
-      if (bookedMins != null) etaMins = Math.max(etaMins, bookedMins);
-      return minutesToTime(etaMins);
-    }
-  }
+  const live = liveEtaToNextStop(run, ctx);
+  if (live) return live;
 
   // 2. Booked delivery slot.
+  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
   if (bookedMins != null) return (run.bookingTime ?? "").trim();
 
   // 3. Baseline.

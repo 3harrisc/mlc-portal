@@ -33,6 +33,7 @@ import {
   deriveStatus,
   displayDestination,
   legSiteTimes,
+  liveEtaToNextStop,
   quickEta,
 } from "@/lib/portal/loads";
 import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
@@ -356,7 +357,17 @@ function LoadDetailView({
   );
   const chainedInfo = chains.get(run.id);
   const displayedStart = chainedInfo?.chainedStartTime ?? run.startTime;
-  const eta = chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run);
+  // ETA at the next drop: prefer a live projection from the truck's current
+  // position to the next outstanding stop (so it reflects where the lorry
+  // actually is, not the booked collection slot). Fall back to the chained /
+  // booked time when the vehicle isn't reporting a position yet.
+  const coordsMap = useMemo(
+    () => new Map(Object.entries(coords)),
+    [coords],
+  );
+  const liveEta = liveEtaToNextStop(run, { truckPos, coords: coordsMap });
+  const eta =
+    liveEta ?? (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
 
   const { mapPins, mapRoutes } = useMemo(
     () => buildMapData(plan, coords, completedIdx, truckPos, status === "delivered"),

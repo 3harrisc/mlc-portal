@@ -10,6 +10,7 @@ import {
   deliveryEta,
   displayDestination,
   legSiteTimes,
+  liveEtaToNextStop,
   quickEta,
 } from "./loads";
 import { normalizePostcode } from "@/lib/postcode-utils";
@@ -275,6 +276,52 @@ describe("deliveryEta", () => {
     expect(deliveryEta(r, { truckPos, coords: new Map(), now: nowAt("09:00") })).toBe(
       "15:30",
     );
+  });
+});
+
+describe("liveEtaToNextStop", () => {
+  // The live-projection core, shared by the public tracker and the admin
+  // load detail page. Returns null whenever it can't project, so callers
+  // keep their own fallback (chained/booked time) for the not-moving case.
+  function nowAt(hhmm: string): Date {
+    return new Date(`2026-01-15T${hhmm}:00Z`);
+  }
+  const coordsFor = (entries: Array<[string, { lat: number; lng: number }]>) =>
+    new Map(entries.map(([pc, c]) => [normalizePostcode(pc), c]));
+
+  it("returns null when there is no live position", () => {
+    const r = run({ rawText: "GU11 2HL" });
+    expect(
+      liveEtaToNextStop(r, { coords: coordsFor([["GU11 2HL", { lat: 51, lng: -1 }]]) }),
+    ).toBeNull();
+  });
+
+  it("returns null when the target stop has no coords", () => {
+    const r = run({ rawText: "GU11 2HL" });
+    expect(
+      liveEtaToNextStop(r, { truckPos: { lat: 51, lng: -2 }, coords: new Map() }),
+    ).toBeNull();
+  });
+
+  it("returns null when every stop is already done", () => {
+    const r = run({ rawText: "GU11 2HL", completedStopIndexes: [0] });
+    expect(
+      liveEtaToNextStop(r, {
+        truckPos: { lat: 51, lng: -2 },
+        coords: coordsFor([["GU11 2HL", { lat: 51, lng: -1 }]]),
+      }),
+    ).toBeNull();
+  });
+
+  it("projects a clock time when a live fix and target coords exist", () => {
+    const r = run({ rawText: "GU11 2HL" });
+    const at = { lat: 51.2, lng: -1.0 };
+    const out = liveEtaToNextStop(r, {
+      truckPos: at,
+      coords: coordsFor([["GU11 2HL", at]]),
+      now: nowAt("10:30"),
+    });
+    expect(out).toBe("10:30");
   });
 });
 

@@ -194,6 +194,13 @@ function LoadDetailView({
   const driver = lookupDriver(byVehicle, run.vehicle);
   const { positions } = useVehiclePositions();
   const truckPos = positions[normVehicle(run.vehicle)] ?? null;
+  // Freshness of the live position. `collectedAt` is when the collector last
+  // wrote — it froze for a week during the Webfleet outage, so a stale value
+  // here is exactly what we want to surface rather than present as live.
+  const truckAgeMs = truckPos
+    ? Date.now() - new Date(truckPos.collectedAt).getTime()
+    : null;
+  const truckStale = truckAgeMs != null && truckAgeMs > STALE_MINS * 60_000;
   const isAdmin = profile?.role === "admin";
 
   // Canonical fleet list for the inline reg picker (admin only). Includes
@@ -381,8 +388,16 @@ function LoadDetailView({
     (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
 
   const { mapPins, mapRoutes } = useMemo(
-    () => buildMapData(plan, coords, completedIdx, truckPos, status === "delivered"),
-    [plan, coords, completedIdx, truckPos, status],
+    () =>
+      buildMapData(
+        plan,
+        coords,
+        completedIdx,
+        truckPos,
+        status === "delivered",
+        truckStale,
+      ),
+    [plan, coords, completedIdx, truckPos, status, truckStale],
   );
 
   const events = useMemo<TimelineEvent[]>(
@@ -537,10 +552,23 @@ function LoadDetailView({
               </span>
               <div className="actions">
                 {truckPos && (
-                  <span className="muted mono" style={{ fontSize: 11 }}>
-                    {truckPos.speedKph != null
-                      ? `${Math.round(truckPos.speedKph * 0.621371)} mph`
-                      : "Position live"}
+                  <span
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      color: truckStale ? "var(--err)" : "var(--ink-500)",
+                    }}
+                    title={`Last position update: ${new Date(
+                      truckPos.collectedAt,
+                    ).toLocaleString("en-GB")}`}
+                  >
+                    {truckStale
+                      ? `Position stale · ${relTimeShort(truckPos.collectedAt)}`
+                      : `${
+                          truckPos.speedKph != null
+                            ? `${Math.round(truckPos.speedKph * 0.621371)} mph · `
+                            : ""
+                        }updated ${relTimeShort(truckPos.collectedAt)}`}
                   </span>
                 )}
               </div>
@@ -1044,12 +1072,30 @@ function formatLocalIso(iso: string): string {
   return `${date} ${time}`;
 }
 
+// A live position older than this (by collector time) is treated as stale:
+// the pin greys out and the header flags it instead of implying it's current.
+// The collector runs every ~2 min, so 15 min = several missed cycles.
+const STALE_MINS = 15;
+
+/** "just now" / "3m ago" / "2h ago" / "5d ago" from an ISO timestamp. */
+function relTimeShort(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const mins = Math.round((Date.now() - t) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 function buildMapData(
   plan: RoutePlan,
   coords: Record<string, { lat: number; lng: number }>,
   completedIdx: Set<number>,
   truckPos: { lat: number; lng: number } | null,
   delivered: boolean,
+  truckStale: boolean,
 ): { mapPins: MapPin[]; mapRoutes: MapRoute[] } {
   const pins: MapPin[] = [];
   // One [lng, lat] per leg, in plan order. We DON'T filter out missing
@@ -1092,13 +1138,16 @@ function buildMapData(
   });
 
   if (truckPos && !delivered) {
+    // Stale positions render greyed and without the live halo so a frozen
+    // feed doesn't read as the truck's current location.
     pins.push({
       id: "truck",
       kind: "truck",
       lng: truckPos.lng,
       lat: truckPos.lat,
-      selected: true,
-      label: "Vehicle position",
+      selected: !truckStale,
+      color: truckStale ? "#A6ACBC" : undefined,
+      label: truckStale ? "Last known position (stale)" : "Vehicle position",
     });
   }
 

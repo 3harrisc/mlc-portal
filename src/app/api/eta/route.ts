@@ -187,12 +187,12 @@ export async function GET(req: Request) {
 
     // This is the standard "object report" style endpoint
     // If you used a slightly different action earlier, this still works for most accounts.
+    // Webfleet rejects URL-embedded credentials — username/password go in a
+    // Basic Auth header, account + apikey stay in the query. See webfleetBasicAuth.
     let url =
       `${baseUrl}?` +
       `lang=en&` +
       `account=${encodeURIComponent(account)}&` +
-      `username=${encodeURIComponent(username)}&` +
-      `password=${encodeURIComponent(password)}&` +
       `apikey=${encodeURIComponent(apiKey)}&` +
       `action=showObjectReportExtern&` +
       `outputformat=csv`;
@@ -201,7 +201,13 @@ export async function GET(req: Request) {
     // Note: Don't use filterstring - it's too restrictive for Webfleet
     // Instead, fetch all and filter in code (allows matching across all fields)
 
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Authorization:
+          "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+      },
+    });
     const text = await res.text();
 
     if (!res.ok) {

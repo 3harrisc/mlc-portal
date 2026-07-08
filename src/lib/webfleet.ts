@@ -120,6 +120,22 @@ export function extractLatLng(row: Row): { lat: number; lng: number } | null {
   return null;
 }
 
+/**
+ * Webfleet auth. As of ~July 2026 Webfleet rejects credentials passed in the
+ * query string with "1180 URL credentials are not supported. Use BasicAuth
+ * instead." So username + password now travel in an HTTP Basic Authorization
+ * header; only account + apikey remain as query params.
+ */
+export function webfleetBasicAuth(
+  username: string,
+  password: string,
+): Record<string, string> {
+  return {
+    Authorization:
+      "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+  };
+}
+
 /** Fetch ALL vehicles from Webfleet in one CSV call */
 export async function fetchAllVehiclesFromWebfleet(): Promise<{
   rows: Row[];
@@ -139,13 +155,14 @@ export async function fetchAllVehiclesFromWebfleet(): Promise<{
     `${baseUrl}?` +
     `lang=en&` +
     `account=${encodeURIComponent(account)}&` +
-    `username=${encodeURIComponent(username)}&` +
-    `password=${encodeURIComponent(password)}&` +
     `apikey=${encodeURIComponent(apiKey)}&` +
     `action=showObjectReportExtern&` +
     `outputformat=csv`;
 
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers: webfleetBasicAuth(username, password),
+  });
   const text = await res.text();
 
   if (!res.ok) {

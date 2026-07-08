@@ -41,18 +41,24 @@ export async function GET(req: Request) {
     }, { status: 500 });
   }
 
+  // Webfleet rejects URL-embedded credentials — username/password go in a
+  // Basic Auth header, account + apikey stay in the query.
   const url =
     `${baseUrl}?` +
     `lang=en&` +
     `account=${encodeURIComponent(account)}&` +
-    `username=${encodeURIComponent(username)}&` +
-    `password=${encodeURIComponent(password)}&` +
     `apikey=${encodeURIComponent(apiKey)}&` +
     `action=getRemainingDrivingTimesEu&` +
     `outputformat=csv`;
 
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Authorization:
+          "Basic " + Buffer.from(`${username}:${password}`).toString("base64"),
+      },
+    });
     const rawText = await res.text();
 
     if (!res.ok) {

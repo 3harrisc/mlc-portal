@@ -7,7 +7,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  collectionTimes,
   deliveryEta,
+  deriveStatus,
   displayDestination,
   legSiteTimes,
   liveEtaToNextStop,
@@ -439,5 +441,90 @@ describe("legSiteTimes", () => {
     const t = legSiteTimes(r, 0);
     expect(t.arrivedAt).toBeNull();
     expect(t.departedAt).toBeNull();
+  });
+});
+
+describe("collectionTimes", () => {
+  // The collection-point lifecycle the load page and customer tracker render:
+  // arrived → loading (on site) → departed. Driven by the collect* geofence
+  // fields the update-progress cron stamps.
+  const hhmmFromMs = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
+
+  it("returns empty state when there is no collection progress", () => {
+    expect(collectionTimes(run({}))).toEqual({
+      arrivedAt: null,
+      departedAt: null,
+      loading: false,
+      loadingSince: null,
+      departed: false,
+    });
+  });
+
+  it("reports loading while on site at collection but not departed", () => {
+    const arrivedMs = Date.now() - 10 * 60_000;
+    const t = collectionTimes(
+      run({
+        progress: {
+          completedIdx: [],
+          onSiteIdx: null,
+          onSiteSinceMs: null,
+          lastInside: false,
+          collectArrivedMs: arrivedMs,
+        },
+      }),
+    );
+    expect(t.loading).toBe(true);
+    expect(t.departed).toBe(false);
+    expect(t.arrivedAt).toBe(hhmmFromMs(arrivedMs));
+    expect(t.loadingSince).toBe(hhmmFromMs(arrivedMs));
+    expect(t.departedAt).toBeNull();
+  });
+
+  it("reports departed once the departure is stamped", () => {
+    const arrivedMs = Date.now() - 30 * 60_000;
+    const departedISO = new Date(Date.now() - 5 * 60_000).toISOString();
+    const t = collectionTimes(
+      run({
+        progress: {
+          completedIdx: [],
+          onSiteIdx: null,
+          onSiteSinceMs: null,
+          lastInside: false,
+          collectArrivedMs: arrivedMs,
+          collected: true,
+          collectDepartedISO: departedISO,
+        },
+      }),
+    );
+    expect(t.loading).toBe(false);
+    expect(t.departed).toBe(true);
+    expect(t.arrivedAt).toBe(hhmmFromMs(arrivedMs));
+    expect(t.departedAt).toBe(new Date(departedISO).toTimeString().slice(0, 5));
+    expect(t.loadingSince).toBeNull();
+  });
+});
+
+describe("deriveStatus — collection departure", () => {
+  const today = "2026-04-30";
+
+  it("is 'loading' when it's today with a vehicle and no departure yet", () => {
+    const r = run({ date: today, vehicle: "C12MLC", rawText: "GU11 2HL" });
+    expect(deriveStatus(r, today)).toBe("loading");
+  });
+
+  it("flips to 'in-transit' once the lorry departs the collection point", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL",
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectDepartedISO: new Date().toISOString(),
+      },
+    });
+    expect(deriveStatus(r, today)).toBe("in-transit");
   });
 });

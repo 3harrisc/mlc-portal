@@ -162,8 +162,9 @@ export async function GET(req: Request) {
       const stops = parseStops(run.raw_text ?? "");
       runStopsMap.set(run.id, stops);
       for (const pc of stops) allPostcodes.add(normalizePostcode(pc));
-      // Include fromPostcode for backload collection tracking
-      if (run.run_type === "backload" && run.from_postcode) {
+      // Include fromPostcode so the collection point is geocoded for both
+      // backload pickups and delivery collections.
+      if (run.from_postcode) {
         allPostcodes.add(normalizePostcode(run.from_postcode));
       }
     }
@@ -267,11 +268,16 @@ export async function GET(req: Request) {
       const vehicleLL: LngLat = { lng: pos.lng, lat: pos.lat };
       const nowMs = Date.now();
 
-      // ── Backload collection tracking (at fromPostcode) ──
-      // Keep tracking until both collected AND departed (need to detect departure)
-      if (run.run_type === "backload" && (!p.collected || !p.collectDepartedISO)) {
-        const collPc = normalizePostcode(run.from_postcode ?? "");
-        const collLL = collPc ? coordsMap.get(collPc) : null;
+      // ── Collection tracking (at fromPostcode) ──
+      // Applies to backload pickups AND delivery collections. Skipped when
+      // fromPostcode coincides with a drop (that stop is tracked on its own).
+      // Keep tracking until both collected AND departed so we can stamp the
+      // departure that unlocks the live onward ETA.
+      const collPc = normalizePostcode(run.from_postcode ?? "");
+      const fromIsADrop =
+        collPc !== "" && stops.some((s) => normalizePostcode(s) === collPc);
+      if (collPc && !fromIsADrop && (!p.collected || !p.collectDepartedISO)) {
+        const collLL = coordsMap.get(collPc);
 
         if (collLL) {
           const collDist = haversineMeters(vehicleLL, collLL);

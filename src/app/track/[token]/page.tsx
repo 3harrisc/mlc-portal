@@ -5,6 +5,7 @@ import { todayISO } from "@/lib/time-utils";
 import { parseStops, normalizePostcode } from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
 import {
+  collectionTimes,
   deriveStatus,
   deliveryEta,
   displayDestination,
@@ -157,6 +158,46 @@ export default async function PublicTrackPage({ params }: PageProps) {
           >
             {run.fromPostcode} → {displayDestination(run) || "—"} · {dateDisp}
           </div>
+          {(() => {
+            // Collection status: while the lorry is on site at the collection
+            // point show "Loading", then "Collected · en route" once it leaves.
+            const c = collectionTimes(run);
+            if (!c.loading && !c.departed) return null;
+            const loading = c.loading;
+            return (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "3px 10px",
+                  borderRadius: 99,
+                  marginBottom: 8,
+                  background: loading
+                    ? "var(--mlc-blue-50, #eef4ff)"
+                    : "var(--ok-bg, #e8f5e9)",
+                  color: loading ? "var(--mlc-blue)" : "var(--ok)",
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: "currentColor",
+                    animation: loading
+                      ? "pulse 1.5s ease-in-out infinite"
+                      : undefined,
+                  }}
+                />
+                {loading
+                  ? `Loading at ${run.fromPostcode}${c.loadingSince ? ` · since ${c.loadingSince}` : ""}`
+                  : `Collected${c.departedAt ? ` ${c.departedAt}` : ""} · en route`}
+              </div>
+            );
+          })()}
           <div className="stat-row" style={{ marginTop: 8 }}>
             <div className="stat-cell">
               <div className="l">Progress</div>

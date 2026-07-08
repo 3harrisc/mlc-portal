@@ -30,11 +30,13 @@ import PortalMap, {
 import ShareLinkPanel from "@/components/portal/ShareLinkPanel";
 import { useToast } from "@/components/portal/ToastContext";
 import {
+  collectionTimes,
   deriveStatus,
   displayDestination,
   legSiteTimes,
   liveEtaToNextStop,
   quickEta,
+  type SiteTimes,
 } from "@/lib/portal/loads";
 import { chainedEta, computeLoadChains } from "@/lib/portal/load-chains";
 
@@ -365,9 +367,18 @@ function LoadDetailView({
     () => new Map(Object.entries(coords)),
     [coords],
   );
+  // Collection-point lifecycle (arrived → loading → departed) from the
+  // geofence progress fields. Drives the origin leg's state, the timeline,
+  // and the ETA gate below.
+  const collection = collectionTimes(run);
   const liveEta = liveEtaToNextStop(run, { truckPos, coords: coordsMap });
+  // Show the live projection only once the lorry is genuinely en route. While
+  // it's still loading at the collection point we hold the booked/chained time
+  // — a "live" ETA from a stationary truck just reads as the booked slot.
+  const usingLiveEta = !collection.loading && !!liveEta;
   const eta =
-    liveEta ?? (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
+    (usingLiveEta ? liveEta : null) ??
+    (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
 
   const { mapPins, mapRoutes } = useMemo(
     () => buildMapData(plan, coords, completedIdx, truckPos, status === "delivered"),
@@ -488,6 +499,15 @@ function LoadDetailView({
           <div className="v mono">
             {status === "delivered" ? "Delivered" : eta}
           </div>
+          {status !== "delivered" && collection.loading ? (
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              loading at collection
+            </div>
+          ) : usingLiveEta ? (
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              live · from vehicle position
+            </div>
+          ) : null}
         </div>
         <div className="stat-cell">
           <div className="l">Service</div>
@@ -547,10 +567,21 @@ function LoadDetailView({
                   const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
                   const isOrigin = leg.kind === "origin";
                   const isReturn = leg.kind === "return";
-                  // Arrived / departed / on-site state — surfaced for every
-                  // real (non-synthetic) leg so customers can read off their
-                  // KPI fields (on-time arrival, dwell time, etc.).
-                  const site = legSiteTimes(run, leg.stopIndex ?? null);
+                  // Arrived / departed / on-site state. For real drops this
+                  // comes from per-stop completedMeta; for the origin (the
+                  // collection point) it comes from the collect* geofence
+                  // fields, so the leg shows Arrived → Loading → Departed.
+                  const site: SiteTimes = isOrigin
+                    ? {
+                        arrivedAt: collection.arrivedAt,
+                        departedAt: collection.departedAt,
+                        onSite: collection.loading,
+                        onSiteSince: collection.loadingSince,
+                      }
+                    : legSiteTimes(run, leg.stopIndex ?? null);
+                  // Collection reads as "done" (green) once the lorry departs.
+                  const originLoaded = isOrigin && collection.departed;
+                  const doneLike = done || originLoaded;
                   return (
                     <li
                       key={`${leg.postcode}-${i}-${leg.kind}`}
@@ -565,7 +596,7 @@ function LoadDetailView({
                         borderRadius: 6,
                         background: site.onSite
                           ? "var(--mlc-blue-50)"
-                          : done
+                          : doneLike
                             ? "var(--ok-bg)"
                             : isOrigin
                               ? "var(--mlc-blue-50)"
@@ -579,7 +610,7 @@ function LoadDetailView({
                           borderRadius: "50%",
                           background: site.onSite
                             ? "var(--mlc-blue)"
-                            : done
+                            : doneLike
                               ? "var(--ok)"
                               : isOrigin
                                 ? "var(--mlc-blue)"
@@ -628,7 +659,9 @@ function LoadDetailView({
                                 className="mono"
                                 style={{ color: "var(--mlc-blue)" }}
                               >
-                                <span className="muted">On site since</span>{" "}
+                                <span className="muted">
+                                  {isOrigin ? "Loading since" : "On site since"}
+                                </span>{" "}
                                 <span className="bold">{site.onSiteSince}</span>
                               </span>
                             )}
@@ -660,12 +693,12 @@ function LoadDetailView({
                               animation: "pulse 1.5s ease-in-out infinite",
                             }}
                           />
-                          On Site
+                          {isOrigin ? "Loading" : "On Site"}
                         </span>
-                      ) : done ? (
+                      ) : doneLike ? (
                         <span className="pill delivered">
                           <span className="dot" />
-                          Done
+                          {originLoaded ? "Loaded" : "Done"}
                         </span>
                       ) : null}
                     </li>
@@ -956,11 +989,32 @@ function buildTimeline(
         kind: "current",
       });
     } else if (leg.kind === "origin") {
-      events.push({
-        at: fallbackAt,
-        title: `Start: ${leg.label} at ${leg.postcode}`,
-        kind: "info",
-      });
+      // Collection lifecycle from the geofence fields: arrival at the
+      // collection point, loading whilst on site, then departure.
+      const arrivedMs = run.progress?.collectArrivedMs ?? null;
+      const departedISO = run.progress?.collectDepartedISO ?? null;
+      if (arrivedMs != null) {
+        events.push({
+          at: formatLocalIso(new Date(arrivedMs).toISOString()),
+          title: departedISO
+            ? `Arrived at collection · ${leg.postcode}`
+            : `Loading at ${leg.postcode}`,
+          kind: departedISO ? "ok" : "current",
+        });
+      } else {
+        events.push({
+          at: fallbackAt,
+          title: `Start: ${leg.label} at ${leg.postcode}`,
+          kind: "info",
+        });
+      }
+      if (departedISO) {
+        events.push({
+          at: formatLocalIso(departedISO),
+          title: `Loaded & departed ${leg.postcode}`,
+          kind: "ok",
+        });
+      }
     } else if (leg.kind === "return") {
       events.push({
         at: fallbackAt,

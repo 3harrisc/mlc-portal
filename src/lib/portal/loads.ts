@@ -23,6 +23,9 @@ export function deriveStatus(run: PlannedRun, todayISO: string): LoadStatus {
 
   if (stops.length > 0 && completed >= stops.length) return "delivered";
   if (completed > 0) return "in-transit";
+  // Left the collection point but no drop done yet — genuinely en route, so
+  // "in-transit" rather than the "loading" default below.
+  if (run.progress?.collectDepartedISO) return "in-transit";
 
   const isToday = run.date === todayISO;
   const hasVehicle = !!run.vehicle?.trim();
@@ -319,6 +322,44 @@ export function legSiteTimes(
     departedAt: isoToHHMM(meta?.atISO),
     onSite,
     onSiteSince: onSite ? msToHHMM(run.progress?.onSiteSinceMs ?? null) : null,
+  };
+}
+
+/**
+ * Collection-point lifecycle for a run, derived from the geofence progress
+ * fields the /api/cron/update-progress cron writes:
+ *
+ *   * `progress.collectArrivedMs`   — unix-ms when the vehicle entered the
+ *     collection radius (fromPostcode).
+ *   * `progress.collectDepartedISO` — ISO timestamp when it pulled away.
+ *
+ * While the vehicle is inside the radius and hasn't departed, it's `loading`.
+ * Once `collectDepartedISO` is stamped, the load is collected and en route.
+ */
+export interface CollectionTimes {
+  /** "HH:MM" the vehicle reached the collection point, or null. */
+  arrivedAt: string | null;
+  /** "HH:MM" the vehicle left the collection point, or null. */
+  departedAt: string | null;
+  /** True while on site at collection and not yet departed. */
+  loading: boolean;
+  /** "HH:MM" loading started (only set while `loading`). */
+  loadingSince: string | null;
+  /** True once the vehicle has departed the collection point. */
+  departed: boolean;
+}
+
+export function collectionTimes(run: PlannedRun): CollectionTimes {
+  const arrivedMs = run.progress?.collectArrivedMs ?? null;
+  const departedISO = run.progress?.collectDepartedISO ?? null;
+  const departed = !!departedISO;
+  const loading = arrivedMs != null && !departed;
+  return {
+    arrivedAt: msToHHMM(arrivedMs),
+    departedAt: isoToHHMM(departedISO),
+    loading,
+    loadingSince: loading ? msToHHMM(arrivedMs) : null,
+    departed,
   };
 }
 

@@ -4,7 +4,12 @@ import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
 import { parseStops, normalizePostcode } from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
-import { deriveStatus, legSiteTimes, deliveryEta } from "@/lib/portal/loads";
+import {
+  deriveStatus,
+  deliveryEta,
+  displayDestination,
+  legSiteTimes,
+} from "@/lib/portal/loads";
 import StatusPill from "@/components/portal/StatusPill";
 import BrandMark from "@/components/portal/BrandMark";
 import PortalMap, {
@@ -150,7 +155,7 @@ export default async function PublicTrackPage({ params }: PageProps) {
           <div
             style={{ fontSize: 13, color: "var(--ink-700)", marginBottom: 8 }}
           >
-            {run.fromPostcode} → {run.toPostcode || "—"} · {dateDisp}
+            {run.fromPostcode} → {displayDestination(run) || "—"} · {dateDisp}
           </div>
           <div className="stat-row" style={{ marginTop: 8 }}>
             <div className="stat-cell">

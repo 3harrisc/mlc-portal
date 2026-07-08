@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface MapPin {
   id: string;
@@ -62,6 +62,11 @@ export default function PortalMap({
   const mapboxRef = useRef<unknown>(null);
   const markersRef = useRef<Array<{ remove: () => void }>>([]);
   const sourcesAddedRef = useRef<Set<string>>(new Set());
+  // Flips true once the async-imported map has finished loading. The overlay
+  // effect depends on it so markers + fitBounds get applied even when the
+  // pins never change after mount — the case on the server-rendered public
+  // tracker, where props are already populated on the first client render.
+  const [ready, setReady] = useState(false);
 
   // Init map once
   useEffect(() => {
@@ -81,12 +86,18 @@ export default function PortalMap({
       });
       map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
       mapRef.current = map;
+      // Attached before "load" fires, so the overlay effect re-runs (via the
+      // `ready` dep) as soon as the style is ready.
+      map.on("load", () => {
+        if (!cancelled) setReady(true);
+      });
     })();
     return () => {
       cancelled = true;
       const map = mapRef.current as { remove?: () => void } | null;
       map?.remove?.();
       mapRef.current = null;
+      setReady(false);
     };
     // defaultCenter/defaultZoom are first-render only — re-mount the component
     // if you need to relocate the map.
@@ -110,7 +121,7 @@ export default function PortalMap({
     } else {
       map.on("load", apply);
     }
-  }, [pins, routes, autoFit]);
+  }, [pins, routes, autoFit, ready]);
 
   if (!TOKEN) {
     return (

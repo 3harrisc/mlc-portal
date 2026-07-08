@@ -4,6 +4,7 @@ import {
   extractPostcode,
   normalizePostcode,
   parseStops,
+  parseStopsWithTimes,
 } from "@/lib/postcode-utils";
 import { estimateFinishTime } from "@/lib/runDuration";
 import { haversineKm } from "@/lib/geo-utils";
@@ -65,8 +66,36 @@ export function progressTuple(run: PlannedRun): { completed: number; total: numb
  * Earlier this function piped through estimateFinishTime, which returns
  * finish-back-at-base time and confused customers reading the page.
  */
+/**
+ * The booked delivery slot for a run, as an "HH:MM" string (or null).
+ *
+ * The parser embeds each stop's booking time in `raw_text`
+ * ("GU11 2HL 12:30 REF:…") but doesn't always persist it to `bookingTime`.
+ * When it hasn't, the older resolution fell through to `collectionTime` /
+ * `startTime` — i.e. the 08:30 collection/departure, not the 12:30 delivery
+ * booking — so the ETA read hours early. Resolution order:
+ *
+ *   1. Explicit `bookingTime` when set.
+ *   2. Otherwise the time parsed off the delivery (last timed) stop in
+ *      `raw_text` — the real customer slot.
+ */
+export function bookedDeliverySlot(run: PlannedRun): string | null {
+  const explicit = (run.bookingTime ?? "").trim();
+  if (explicit) return explicit;
+  const timed = parseStopsWithTimes(run.rawText);
+  for (let i = timed.length - 1; i >= 0; i--) {
+    if (timed[i].time) return timed[i].time;
+  }
+  return null;
+}
+
 export function quickEta(run: PlannedRun): string {
-  const booked = (run.bookingTime ?? run.collectionTime ?? "").trim();
+  // Prefer the booked delivery slot (explicit or parsed from raw_text) over
+  // collectionTime, which is often the 08:30 collection/departure rather than
+  // the customer's delivery booking.
+  const slot = bookedDeliverySlot(run);
+  if (slot) return slot;
+  const booked = (run.collectionTime ?? "").trim();
   if (booked) return booked;
   return run.startTime || "—";
 }
@@ -146,8 +175,11 @@ export function liveEtaToNextStop(
     ((straightKm * ROAD_FACTOR) / HGV_AVG_SPEED_KPH) * 60,
   );
   let etaMins = ukMinutesOfDay(now) + travelMins;
-  // Don't promise earlier than the booked slot.
-  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
+  // Don't promise earlier than the booked slot for the stop we're heading to.
+  // Prefer that stop's own parsed time, falling back to the run-level slot.
+  const timed = parseStopsWithTimes(run.rawText);
+  const bookedForTarget = timed[targetIdx]?.time ?? bookedDeliverySlot(run) ?? "";
+  const bookedMins = timeToMinutes(bookedForTarget);
   if (bookedMins != null) etaMins = Math.max(etaMins, bookedMins);
   return minutesToTime(etaMins);
 }
@@ -176,9 +208,11 @@ export function deliveryEta(run: PlannedRun, ctx: DeliveryEtaContext = {}): stri
   const live = liveEtaToNextStop(run, ctx);
   if (live) return live;
 
-  // 2. Booked delivery slot.
-  const bookedMins = timeToMinutes((run.bookingTime ?? "").trim());
-  if (bookedMins != null) return (run.bookingTime ?? "").trim();
+  // 2. Booked delivery slot — explicit bookingTime, or the time parsed off
+  //    the delivery stop in raw_text (never collectionTime, which is the
+  //    collection/departure slot, not the delivery booking).
+  const slot = bookedDeliverySlot(run);
+  if (slot) return slot;
 
   // 3. Baseline.
   return run.startTime || "—";

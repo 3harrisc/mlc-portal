@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  bookedDeliverySlot,
   collectionTimes,
   deliveryEta,
   deriveStatus,
@@ -501,6 +502,63 @@ describe("collectionTimes", () => {
     expect(t.arrivedAt).toBe(hhmmFromMs(arrivedMs));
     expect(t.departedAt).toBe(new Date(departedISO).toTimeString().slice(0, 5));
     expect(t.loadingSince).toBeNull();
+  });
+});
+
+describe("bookedDeliverySlot", () => {
+  // The delivery booking often lives only in raw_text ("GU11 2HL 12:30 …")
+  // and never reaches bookingTime; this is what pulls it back out so the ETA
+  // shows the delivery slot, not the 08:30 collection.
+  it("returns the explicit bookingTime when set", () => {
+    expect(
+      bookedDeliverySlot(run({ bookingTime: "14:00", rawText: "GU11 2HL 12:30" })),
+    ).toBe("14:00");
+  });
+
+  it("parses the delivery time from raw_text when bookingTime is absent", () => {
+    expect(
+      bookedDeliverySlot(
+        run({ rawText: "GU11 2HL 12:30 REF:FC156297 ADDR:CEVA LOGISTICS" }),
+      ),
+    ).toBe("12:30");
+  });
+
+  it("does not pick a time out of the REF/ADDR metadata", () => {
+    // No time before REF: — the '10:00' lives inside the address text.
+    expect(
+      bookedDeliverySlot(
+        run({ rawText: "GU11 2HL REF:FC1 ADDR:UNIT 10:00 SOMEWHERE" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when raw_text carries no time", () => {
+    expect(bookedDeliverySlot(run({ rawText: "GU11 2HL" }))).toBeNull();
+  });
+
+  it("uses the last timed stop on a multi-drop run", () => {
+    expect(
+      bookedDeliverySlot(run({ rawText: "BS1 1AA 09:00\nGU11 2HL 12:30" })),
+    ).toBe("12:30");
+  });
+});
+
+describe("quickEta — delivery slot from raw_text", () => {
+  it("prefers the parsed 12:30 delivery slot over the 08:30 collection", () => {
+    // The exact FC156297 shape that read 08:30 instead of 12:30.
+    const r = run({
+      startTime: "08:30",
+      collectionTime: "08:30",
+      rawText: "GU11 2HL 12:30 REF:FC156297 ADDR:CEVA LOGISTICS",
+    });
+    expect(quickEta(r)).toBe("12:30");
+  });
+
+  it("falls back to collectionTime, then startTime, when raw_text has no time", () => {
+    expect(quickEta(run({ startTime: "06:00", collectionTime: "08:30", rawText: "GU11 2HL" }))).toBe(
+      "08:30",
+    );
+    expect(quickEta(run({ startTime: "06:00", rawText: "GU11 2HL" }))).toBe("06:00");
   });
 });
 

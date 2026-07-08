@@ -19,6 +19,7 @@
 import type { PlannedRun } from "@/types/runs";
 import { computeChainedStarts } from "@/lib/runDuration";
 import { type LngLat } from "@/lib/geo-utils";
+import { bookedDeliverySlot } from "./loads";
 
 export interface ChainedInfo {
   chainedStartTime: string;
@@ -96,7 +97,9 @@ export function chainedEta(
   chained: ChainedInfo | undefined,
 ): string {
   if (chained?.chainedStartTime) return chained.chainedStartTime;
-  const booked = (run.bookingTime ?? run.collectionTime ?? "").trim();
+  const slot = bookedDeliverySlot(run);
+  if (slot) return slot;
+  const booked = (run.collectionTime ?? "").trim();
   if (booked) return booked;
   return run.startTime || "—";
 }

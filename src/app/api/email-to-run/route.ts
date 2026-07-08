@@ -676,10 +676,11 @@ export async function POST(req: Request) {
         ? (collectionTime || "08:00")  // backload: start at collection time or default depot departure
         : (collectionTime || deliveryTime || "08:00");
 
-      // For backloads: collectionTime is the pickup booking at the COLLECTION SITE only.
-      // The delivery booking is already embedded in rawText — don't bleed it into collectionTime.
-      // For regular runs: use deliveryTime as the chain anchor booking.
-      const bookingTime = runType === "backload"
+      // collectionSlot is what we persist to run.collectionTime — the chain
+      // anchor. For backloads that's strictly the pickup booking (the delivery
+      // booking stays embedded in rawText); for regular runs it's the
+      // collection slot, or the delivery time when no separate slot was given.
+      const collectionSlot = runType === "backload"
         ? (collectionTime || undefined)
         : (collectionTime || deliveryTime || undefined);
 
@@ -702,7 +703,12 @@ export async function POST(req: Request) {
         progress: DEFAULT_PROGRESS,
         runType,
         runOrder: null,
-        collectionTime: bookingTime,
+        collectionTime: collectionSlot,
+        // Persist the delivery booking in its own field so downstream ETA
+        // logic reads the real slot (e.g. 12:30) rather than falling back to
+        // the collection time. Previously left unset, so the delivery slot
+        // survived only inside rawText.
+        bookingTime: deliveryTime || undefined,
       };
 
       // Forwarded customer emails (Ashwood schedules, Consolid8 bookings,

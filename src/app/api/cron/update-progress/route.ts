@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
-import { COMPLETION_RADIUS_METERS, MIN_STANDSTILL_MINS } from "@/lib/constants";
+import {
+  COMPLETION_RADIUS_METERS,
+  MIN_STANDSTILL_MINS,
+  STANDSTILL_MATCH_RADIUS_METERS,
+} from "@/lib/constants";
 import { normalizePostcode, parseStops } from "@/lib/postcode-utils";
 import { haversineMeters, nextStopIndex, minutesBetween, type LngLat } from "@/lib/geo-utils";
+import {
+  updateStandstillAnchor,
+  matchStandstillToStop,
+  type StandstillDeparture,
+} from "@/lib/standstill";
 
 const DEFAULT_PROGRESS: ProgressState = {
   completedIdx: [],
@@ -310,9 +319,52 @@ export async function GET(req: Request) {
         if (!p.completedIdx.includes(i)) uncompletedIdxs.push(i);
       }
 
+      // ── Standstill anchor tracking ──
+      // The geofence path below needs the vehicle within 800m of the postcode
+      // centroid; real sites are often further out. Track where the vehicle is
+      // actually holding position so a long standstill can complete the
+      // nearest stop, and departures from off-centroid sites get stamped.
+      // Skipped once everything is done and no departure stamp is pending.
+      let stillDeparture: StandstillDeparture | null = null;
+      if (uncompletedIdxs.length || p.stillStopIdx != null) {
+        stillDeparture = updateStandstillAnchor(p, vehicleLL, nowMs);
+      }
+
       // All stops completed — but check if we still need to detect departure
       // from the last completed stop
       if (!uncompletedIdxs.length) {
+        // Vehicle just pulled away from a standstill-matched stop
+        if (stillDeparture != null) {
+          const mergedMeta: Record<
+            number,
+            { atISO?: string; by: "auto" | "admin"; arrivedISO?: string }
+          > = { ...(run.completed_meta ?? {}) };
+          const entry = mergedMeta[stillDeparture.idx];
+          if (!entry) {
+            mergedMeta[stillDeparture.idx] = {
+              by: "auto" as const,
+              arrivedISO: stillDeparture.arrivedMs
+                ? new Date(stillDeparture.arrivedMs).toISOString()
+                : new Date().toISOString(),
+              atISO: new Date().toISOString(),
+            };
+          } else if (!entry.atISO) {
+            mergedMeta[stillDeparture.idx] = {
+              ...entry,
+              atISO: new Date().toISOString(),
+            };
+          }
+
+          await sb.from(run._source).update({
+            progress: p,
+            completed_meta: mergedMeta,
+          }).eq("id", run.id);
+
+          updated++;
+          results.push({ runId: run.id, vehicle: run.vehicle, status: "standstill_departure_stamped" });
+          continue;
+        }
+
         if (p.onSiteIdx != null) {
           const trackedPc = normalizePostcode(stops[p.onSiteIdx]);
           const trackedLL = coordsMap.get(trackedPc);
@@ -348,6 +400,9 @@ export async function GET(req: Request) {
         const allDoneMeta: Record<number, any> = { ...(run.completed_meta ?? {}) };
         let allDonePatched = false;
         for (const idx of (run.completed_stop_indexes ?? [])) {
+          // Standstill-matched stop the vehicle is still parked at — its
+          // atISO gets stamped when the standstill breaks, not before.
+          if (idx === p.stillStopIdx) continue;
           const entry = allDoneMeta[idx];
           if (entry && !entry.atISO) {
             allDoneMeta[idx] = { ...entry, atISO: new Date().toISOString() };
@@ -371,11 +426,13 @@ export async function GET(req: Request) {
       // Find the closest uncompleted stop the vehicle is inside
       let insideIdx: number | null = null;
       let insideDist = Infinity;
+      let minUncompletedDist = Infinity;
       for (const idx of uncompletedIdxs) {
         const pc = normalizePostcode(stops[idx]);
         const ll = coordsMap.get(pc);
         if (!ll) continue;
         const dist = haversineMeters(vehicleLL, ll);
+        if (dist < minUncompletedDist) minUncompletedDist = dist;
         if (dist <= COMPLETION_RADIUS_METERS && dist < insideDist) {
           insideIdx = idx;
           insideDist = dist;
@@ -383,6 +440,11 @@ export async function GET(req: Request) {
       }
 
       let inside = insideIdx != null;
+      // "Near a stop" for the chained-run gate: also covers the standstill
+      // match radius, so run 2 can't standstill-complete a shared postcode
+      // while the vehicle is still parked at run 1's off-centroid site.
+      const nearAnyUncompleted =
+        inside || minUncompletedDist <= STANDSTILL_MATCH_RADIUS_METERS;
       // The target stop index: whichever uncompleted stop we're near, or the first uncompleted
       const nsi = insideIdx ?? uncompletedIdxs[0];
 
@@ -394,10 +456,10 @@ export async function GET(req: Request) {
       if (chainedNonFirstIds.has(run.id)) {
         if (p.pendingDeparture == null) {
           // First time this run is processed — determine initial state
-          p.pendingDeparture = inside; // true if vehicle is already at a stop
+          p.pendingDeparture = nearAnyUncompleted; // true if vehicle is already at a stop
         }
         if (p.pendingDeparture) {
-          if (!inside) {
+          if (!nearAnyUncompleted) {
             // Vehicle has left all stop radii — clear the gate
             p.pendingDeparture = false;
           } else {
@@ -488,6 +550,22 @@ export async function GET(req: Request) {
         p.lastInside = false;
       }
 
+      // ── Standstill matching ──
+      // Not inside any geofence, but the vehicle has been holding position
+      // long enough: attribute the standstill to the nearest uncompleted
+      // stop within the match radius. Catches sites that sit outside the
+      // 800m centroid geofence (one stop per standstill).
+      let stillMatchedIdx: number | null = null;
+      if (!inside) {
+        stillMatchedIdx = matchStandstillToStop({
+          p,
+          stops,
+          coords: coordsMap,
+          uncompletedIdxs,
+          nowMs,
+        });
+      }
+
       // ── Build update payload ──
       const updateRow: Record<string, any> = { progress: p };
 
@@ -503,7 +581,7 @@ export async function GET(req: Request) {
         (idx) => !existingCompleted.includes(idx)
       );
 
-      if (newlyCompleted.length || departureIdx != null) {
+      if (newlyCompleted.length || departureIdx != null || stillDeparture != null) {
         const mergedCompleted = [
           ...new Set([...existingCompleted, ...p.completedIdx]),
         ].sort((a, b) => a - b);
@@ -512,8 +590,10 @@ export async function GET(req: Request) {
 
         // Record arrival for newly completed stops (no atISO yet — set on departure)
         for (const idx of newlyCompleted) {
-          const arrivedMs =
-            idx === departureIdx ? departureArrivedMs : p.onSiteSinceMs;
+          let arrivedMs: number | null;
+          if (idx === departureIdx) arrivedMs = departureArrivedMs;
+          else if (idx === p.stillStopIdx) arrivedMs = p.stillSinceMs ?? null;
+          else arrivedMs = p.onSiteSinceMs;
           mergedMeta[idx] = {
             by: "auto",
             arrivedISO: arrivedMs
@@ -528,6 +608,25 @@ export async function GET(req: Request) {
             ...mergedMeta[departureIdx],
             atISO: new Date().toISOString(),
           };
+        }
+
+        // Stamp departure from a standstill-matched stop
+        if (stillDeparture != null) {
+          const entry = mergedMeta[stillDeparture.idx];
+          if (!entry) {
+            mergedMeta[stillDeparture.idx] = {
+              by: "auto",
+              arrivedISO: stillDeparture.arrivedMs
+                ? new Date(stillDeparture.arrivedMs).toISOString()
+                : new Date().toISOString(),
+              atISO: new Date().toISOString(),
+            };
+          } else if (!entry.atISO) {
+            mergedMeta[stillDeparture.idx] = {
+              ...entry,
+              atISO: new Date().toISOString(),
+            };
+          }
         }
 
         updateRow.completed_stop_indexes = mergedCompleted;
@@ -549,8 +648,8 @@ export async function GET(req: Request) {
         for (const idx of completedToCheck) {
           const entry = patchedMeta[idx];
           // Stop is completed but has no departure time, and we're not
-          // actively tracking it for departure
-          if (entry && !entry.atISO && p.onSiteIdx !== idx) {
+          // actively tracking it for departure (geofence or standstill)
+          if (entry && !entry.atISO && p.onSiteIdx !== idx && p.stillStopIdx !== idx) {
             patchedMeta[idx] = {
               ...entry,
               atISO: new Date().toISOString(),
@@ -558,7 +657,7 @@ export async function GET(req: Request) {
             patched = true;
           }
           // Stop is completed but has no meta at all
-          if (!entry && p.onSiteIdx !== idx) {
+          if (!entry && p.onSiteIdx !== idx && p.stillStopIdx !== idx) {
             patchedMeta[idx] = {
               by: "auto" as const,
               atISO: new Date().toISOString(),
@@ -599,7 +698,9 @@ export async function GET(req: Request) {
           runId: run.id,
           vehicle: run.vehicle,
           status: newlyCompleted.length
-            ? `completed_stops: [${newlyCompleted.join(",")}]`
+            ? `completed_stops: [${newlyCompleted.join(",")}]${
+                stillMatchedIdx != null ? " (standstill)" : ""
+              }`
             : "updated",
         });
       }

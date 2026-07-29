@@ -74,6 +74,13 @@ export type ProgressState = {
   // Chained run protection: vehicle must leave stop area before tracking begins
   // undefined = not yet determined, true = waiting for departure, false = cleared
   pendingDeparture?: boolean;
+  // Standstill matching (cron-owned): where the vehicle is currently holding
+  // position, since when, and which stop the standstill was attributed to
+  // (null until matched). Clients must pass these through untouched.
+  stillLat?: number | null;
+  stillLng?: number | null;
+  stillSinceMs?: number | null;
+  stillStopIdx?: number | null;
 };
 
 export type Weekdays = {

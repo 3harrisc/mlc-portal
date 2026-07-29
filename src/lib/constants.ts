@@ -3,6 +3,16 @@ export const COMPLETION_RADIUS_METERS = 800;
 export const MIN_STANDSTILL_MINS = 3;
 export const STANDSTILL_SPEED_KPH = 3;
 
+// ── Standstill matching (cron) ───────────────────────────────────────
+// The 800m centroid geofence misses stops whose real site (farm gate,
+// industrial estate) sits further from the postcode point. A vehicle that
+// holds position (within DRIFT) for MATCH_MIN_MINS is attributed to the
+// nearest uncompleted stop within MATCH_RADIUS. The longer dwell guards
+// against traffic jams / driver breaks near a stop.
+export const STANDSTILL_MATCH_RADIUS_METERS = 2500;
+export const STANDSTILL_MATCH_MIN_MINS = 8;
+export const STANDSTILL_DRIFT_METERS = 150;
+
 // ── HGV driving rules ───────────────────────────────────────────────
 export const HGV_TIME_MULTIPLIER = 1.15;
 export const MAX_SPEED_KPH = 88.5; // 55 mph

@@ -301,8 +301,22 @@ export default function RunDetailPage() {
       const local = progressRef.current ?? DEFAULT_PROGRESS;
       const merged = [...new Set([...local.completedIdx, ...dbProgress.completedIdx])].sort((a, b) => a - b);
 
-      if (merged.length > local.completedIdx.length) {
-        const updated: ProgressState = { ...local, completedIdx: merged };
+      // Carry the cron-owned standstill fields through to local state so a
+      // client-side progress save doesn't clobber them with stale values.
+      const stillChanged =
+        local.stillLat !== dbProgress.stillLat ||
+        local.stillLng !== dbProgress.stillLng ||
+        local.stillSinceMs !== dbProgress.stillSinceMs ||
+        local.stillStopIdx !== dbProgress.stillStopIdx;
+      if (merged.length > local.completedIdx.length || stillChanged) {
+        const updated: ProgressState = {
+          ...local,
+          completedIdx: merged,
+          stillLat: dbProgress.stillLat,
+          stillLng: dbProgress.stillLng,
+          stillSinceMs: dbProgress.stillSinceMs,
+          stillStopIdx: dbProgress.stillStopIdx,
+        };
         setProgress(updated);
         progressRef.current = updated;
       }

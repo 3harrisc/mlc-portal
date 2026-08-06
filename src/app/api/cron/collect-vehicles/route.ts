@@ -48,6 +48,16 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: true, message: "No vehicles with valid positions", upserted: 0 });
     }
 
+    // Read the previous positions so we can skip logging vehicles that
+    // haven't reported a new position (parked overnight/weekends) —
+    // otherwise the history log grows by every vehicle every 2 minutes.
+    const { data: previous } = await getSupabaseAdmin()
+      .from("vehicle_positions")
+      .select("vehicle, pos_time, lat, lng");
+    const prevByVehicle = new Map(
+      (previous ?? []).map((p) => [p.vehicle as string, p])
+    );
+
     // Upsert all vehicles into vehicle_positions (one row per vehicle)
     const { error: upsertError } = await getSupabaseAdmin()
       .from("vehicle_positions")
@@ -70,23 +80,33 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, error: upsertError.message }, { status: 500 });
     }
 
-    // Also append to history log
-    const { error: logError } = await getSupabaseAdmin()
-      .from("vehicle_position_log")
-      .insert(
-        vehicles.map((v) => ({
-          vehicle: v.vehicle,
-          lat: v.lat,
-          lng: v.lng,
-          speed_kph: v.speed_kph,
-          heading: v.heading,
-          pos_time: v.pos_time,
-        }))
-      );
+    // Also append to history log — but only vehicles with a genuinely new
+    // position, so stationary vehicles don't bloat the table.
+    const moved = vehicles.filter((v) => {
+      const prev = prevByVehicle.get(v.vehicle);
+      if (!prev) return true;
+      if (v.pos_time && prev.pos_time) return v.pos_time !== prev.pos_time;
+      return v.lat !== prev.lat || v.lng !== prev.lng;
+    });
 
-    if (logError) {
-      // Non-fatal: log it but don't fail the collection
-      console.warn("[collect-vehicles] History log insert error:", logError.message);
+    if (moved.length) {
+      const { error: logError } = await getSupabaseAdmin()
+        .from("vehicle_position_log")
+        .insert(
+          moved.map((v) => ({
+            vehicle: v.vehicle,
+            lat: v.lat,
+            lng: v.lng,
+            speed_kph: v.speed_kph,
+            heading: v.heading,
+            pos_time: v.pos_time,
+          }))
+        );
+
+      if (logError) {
+        // Non-fatal: log it but don't fail the collection
+        console.warn("[collect-vehicles] History log insert error:", logError.message);
+      }
     }
 
     const durationMs = Date.now() - startMs;
@@ -94,6 +114,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       ok: true,
       upserted: vehicles.length,
+      logged: moved.length,
       vehicleNames: vehicles.map((v) => v.vehicle),
       durationMs,
     });

@@ -8,12 +8,14 @@
 import { describe, it, expect } from "vitest";
 import {
   bookedDeliverySlot,
+  bookedDeliveryWindow,
   collectionTimes,
   deliveryEta,
   deriveStatus,
   displayDestination,
   legSiteTimes,
   liveEtaToNextStop,
+  nextOutstandingIndex,
   quickEta,
 } from "./loads";
 import { normalizePostcode } from "@/lib/postcode-utils";
@@ -584,5 +586,75 @@ describe("deriveStatus — collection departure", () => {
       },
     });
     expect(deriveStatus(r, today)).toBe("in-transit");
+  });
+});
+
+describe("nextOutstandingIndex", () => {
+  it("is 0 when nothing is done", () => {
+    const r = run({ rawText: "NG22 8TX\nBS20 7XN" });
+    expect(nextOutstandingIndex(r)).toBe(0);
+  });
+
+  it("skips stops completed via either source", () => {
+    const r = run({
+      rawText: "NG22 8TX\nBS20 7XN\nGU11 2HL",
+      completedStopIndexes: [0],
+      progress: {
+        completedIdx: [1],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+      },
+    });
+    expect(nextOutstandingIndex(r)).toBe(2);
+  });
+
+  it("is null when every stop is done", () => {
+    const r = run({ rawText: "NG22 8TX", completedStopIndexes: [0] });
+    expect(nextOutstandingIndex(r)).toBeNull();
+  });
+
+  it("is null when there are no stops", () => {
+    expect(nextOutstandingIndex(run({ rawText: "" }))).toBeNull();
+  });
+});
+
+describe("bookedDeliveryWindow", () => {
+  it("returns the window on the last windowed stop", () => {
+    const r = run({ rawText: "NG22 8TX 06:00-07:00\nBS20 7XN 08:00-12:00" });
+    expect(bookedDeliveryWindow(r)).toEqual({ from: "08:00", to: "12:00" });
+  });
+
+  it("is null when stops carry point times only", () => {
+    const r = run({ rawText: "NG22 8TX 08:00\nBS20 7XN 14:00" });
+    expect(bookedDeliveryWindow(r)).toBeNull();
+  });
+
+  it("is null when there are no stops", () => {
+    expect(bookedDeliveryWindow(run({ rawText: "" }))).toBeNull();
+  });
+});
+
+describe("liveEtaToNextStop — window floor", () => {
+  // The spec claims the ETA floor needs no new code: parseStopTime already
+  // returns the window START, which is what liveEtaToNextStop floors at.
+  // That's a load-bearing claim, so pin it down.
+  const coords = new Map([["GU11 2HL", { lat: 51.25, lng: -0.76 }]]);
+  // Effectively on top of the stop, so travel time is ~0 and the floor is
+  // the only thing that can move the answer.
+  const truckPos = { lat: 51.25, lng: -0.76 };
+
+  it("never promises earlier than the window opens", () => {
+    const r = run({ rawText: "GU11 2HL 08:00-12:00" });
+    // 06:00 UK — two hours before the window opens.
+    const now = new Date("2026-04-30T05:00:00Z");
+    expect(liveEtaToNextStop(r, { truckPos, coords, now })).toBe("08:00");
+  });
+
+  it("reports the real arrival once the window is open", () => {
+    const r = run({ rawText: "GU11 2HL 08:00-12:00" });
+    // 09:30 UK — inside the window, so the projection wins over the floor.
+    const now = new Date("2026-04-30T08:30:00Z");
+    expect(liveEtaToNextStop(r, { truckPos, coords, now })).toBe("09:30");
   });
 });

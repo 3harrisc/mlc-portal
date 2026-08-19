@@ -89,6 +89,44 @@ export function bookedDeliverySlot(run: PlannedRun): string | null {
   return null;
 }
 
+/**
+ * Index of the first stop that hasn't been completed, or null when the run
+ * is finished or has no stops.
+ *
+ * Completion has two sources — the legacy `completedStopIndexes` array and
+ * the cron-owned `progress.completedIdx` — and both have to be consulted.
+ * Extracted here so `liveEtaToNextStop` and the window-lateness rule in
+ * `deriveStatus` agree on which stop we're heading to.
+ */
+export function nextOutstandingIndex(run: PlannedRun): number | null {
+  const stops = parseStops(run.rawText);
+  const completed = new Set([
+    ...(run.completedStopIndexes ?? []),
+    ...(run.progress?.completedIdx ?? []),
+  ]);
+  const idx = stops.findIndex((_, i) => !completed.has(i));
+  return idx === -1 ? null : idx;
+}
+
+/**
+ * The booked delivery WINDOW, when the run has one — the counterpart to
+ * `bookedDeliverySlot`, which returns just the opening time.
+ *
+ * Scans backwards for the last stop carrying a range, on the same reasoning
+ * as `bookedDeliverySlot`: the final timed stop is the customer delivery,
+ * earlier ones are intermediate drops.
+ */
+export function bookedDeliveryWindow(
+  run: PlannedRun,
+): { from: string; to: string } | null {
+  const timed = parseStopsWithTimes(run.rawText);
+  for (let i = timed.length - 1; i >= 0; i--) {
+    const { time, windowEnd } = timed[i];
+    if (time && windowEnd) return { from: time, to: windowEnd };
+  }
+  return null;
+}
+
 export function quickEta(run: PlannedRun): string {
   // Prefer the booked delivery slot (explicit or parsed from raw_text) over
   // collectionTime, which is often the 08:30 collection/departure rather than
@@ -157,12 +195,8 @@ export function liveEtaToNextStop(
   if (!truckPos || !coords) return null;
 
   const stops = parseStops(run.rawText);
-  const completed = new Set([
-    ...(run.completedStopIndexes ?? []),
-    ...(run.progress?.completedIdx ?? []),
-  ]);
-  const targetIdx = stops.findIndex((_, i) => !completed.has(i));
-  if (targetIdx === -1) return null;
+  const targetIdx = nextOutstandingIndex(run);
+  if (targetIdx == null) return null;
 
   const target = coords.get(normalizePostcode(stops[targetIdx]));
   if (!target) return null;

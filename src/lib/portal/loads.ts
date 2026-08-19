@@ -1,5 +1,5 @@
 import type { PlannedRun } from "@/types/runs";
-import type { LoadStatus } from "@/components/portal/StatusPill";
+import type { LoadStatus } from "@/lib/portal/status";
 import {
   extractPostcode,
   normalizePostcode,

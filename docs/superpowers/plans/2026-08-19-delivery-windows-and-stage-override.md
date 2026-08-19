@@ -2163,10 +2163,27 @@ Expected: all pass.
 - [ ] **Step 2: Types and lint**
 
 ```bash
-npx tsc --noEmit && npm run lint
+npx tsc --noEmit
 ```
 
 Expected: clean.
+
+```bash
+npm run lint
+```
+
+The repo has a **pre-existing** lint baseline of 90 problems (71 errors, 19
+warnings) as of `46ff20f` — mostly `react-hooks/set-state-in-effect` and
+`@typescript-eslint/no-explicit-any`. "Clean" is therefore not the bar and
+never was; the bar is **no new problems**. Compare against the baseline:
+
+```bash
+git stash -u && git checkout 46ff20f && npm run lint 2>&1 | grep '^✖'
+git checkout - && git stash pop && npm run lint 2>&1 | grep '^✖'
+```
+
+Expected: the same count both times. Fixing the pre-existing baseline is
+out of scope for this work.
 
 - [ ] **Step 3: Production build**
 

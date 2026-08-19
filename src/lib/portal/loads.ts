@@ -18,22 +18,54 @@ import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
  * explicit incident flag) that don't exist yet. Both are stubbed for now and
  * will be wired in phase 3 alongside the share-link / email-notification work.
  */
-export function deriveStatus(run: PlannedRun, todayISO: string): LoadStatus {
+export function deriveStatus(
+  run: PlannedRun,
+  todayISO: string,
+  now: Date = new Date(),
+): LoadStatus {
   const stops = parseStops(run.rawText);
   const completed = completedCount(run);
 
   if (stops.length > 0 && completed >= stops.length) return "delivered";
-  if (completed > 0) return "in-transit";
-  // Left the collection point but no drop done yet — genuinely en route, so
-  // "in-transit" rather than the "loading" default below.
-  if (run.progress?.collectDepartedISO) return "in-transit";
 
+  // "Moving" = at least one drop done, or the lorry has left the collection
+  // point. Either way it's genuinely en route rather than still loading.
+  const moving = completed > 0 || !!run.progress?.collectDepartedISO;
   const isToday = run.date === todayISO;
   const hasVehicle = !!run.vehicle?.trim();
 
+  // Past the booked window on the day it's running. Checked before the
+  // in-transit / loading branches so a load that's moving but late reads as
+  // late — that's the thing the customer needs to know. Gated to today so
+  // historic loads with windows aren't retroactively turned red.
+  if (isToday && (moving || hasVehicle) && pastWindowEnd(run, now)) {
+    return "delayed";
+  }
+
+  if (moving) return "in-transit";
   if (isToday && hasVehicle) return "loading";
   if (run.date < todayISO) return "delayed";
   return "scheduled";
+}
+
+/**
+ * True when UK-local `now` is past the closing time of the window on the
+ * next outstanding stop. False when that stop has no window, or every stop
+ * is done.
+ */
+function pastWindowEnd(run: PlannedRun, now: Date): boolean {
+  const idx = nextOutstandingIndex(run);
+  if (idx == null) return false;
+  const stop = parseStopsWithTimes(run.rawText)[idx];
+  const startMins = timeToMinutes(stop?.time ?? undefined);
+  const endMins = timeToMinutes(stop?.windowEnd ?? undefined);
+  if (startMins == null || endMins == null) return false;
+  // A window that doesn't close after it opens has no meaningful "past the
+  // end" on a single day's clock: an overnight slot (22:00–02:00) is
+  // legitimate, and an inverted one (12:00–08:00) is a typo. Either way,
+  // skip the rule rather than marking the load permanently late.
+  if (endMins <= startMins) return false;
+  return ukMinutesOfDay(now) > endMins;
 }
 
 export function completedCount(run: PlannedRun): number {

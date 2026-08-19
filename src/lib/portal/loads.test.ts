@@ -658,3 +658,104 @@ describe("liveEtaToNextStop — window floor", () => {
     expect(liveEtaToNextStop(r, { truckPos, coords, now })).toBe("09:30");
   });
 });
+
+describe("deriveStatus — delivery window lateness", () => {
+  const today = "2026-04-30";
+  /** 13:00 UK on the test's "today". BST, so 12:00Z. */
+  const afterWindow = new Date("2026-04-30T12:00:00Z");
+  /** 09:00 UK on the test's "today". */
+  const insideWindow = new Date("2026-04-30T08:00:00Z");
+
+  const moving = {
+    completedIdx: [],
+    onSiteIdx: null,
+    onSiteSinceMs: null,
+    lastInside: false,
+    collectDepartedISO: "2026-04-30T06:00:00Z",
+  };
+
+  it("stays in-transit while inside the window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, insideWindow)).toBe("in-transit");
+  });
+
+  it("flips to delayed once the window has closed", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("delayed");
+  });
+
+  it("flags a load still loading past its window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("delayed");
+  });
+
+  it("ignores the window on a stop that is already done", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00\nBS20 7XN 20:00-22:00",
+      completedStopIndexes: [0],
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("does not apply the window rule to a load dated in the past", () => {
+    // Yesterday's load, still moving, past a window that closed at 12:00.
+    // The window rule is gated to today, so this must stay in-transit —
+    // if the gate were missing it would read "delayed".
+    const r = run({
+      date: "2026-04-29",
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("is unaffected when the stop has no window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("skips an overnight window rather than flagging it permanently late", () => {
+    // 22:00–02:00 is a legitimate slot, but "now > 02:00" is true for most
+    // of the day. Without the guard this load would read delayed from 02:01.
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 22:00-02:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("skips an inverted window (a typo) rather than flagging it late", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 12:00-08:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+});

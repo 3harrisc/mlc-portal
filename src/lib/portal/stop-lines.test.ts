@@ -83,6 +83,28 @@ describe("round trip", () => {
       ["BS20 7XN 14:00 REF:B ADDR:Second", "NG22 8TX 08:00-12:00 REF:A ADDR:First"].join("\n"),
     );
   });
+
+  it("does not invent a ref from a REF: that appears inside the address", () => {
+    const raw = "NG22 8TX 08:00-12:00 ADDR:Unit 4, REF:not-a-real-ref, Newark";
+    expect(parseStopLines(raw)[0].ref).toBe("");
+    expect(serialiseStopLines(parseStopLines(raw))).toBe(raw);
+  });
+
+  it("keeps a real ref when the address also contains REF:", () => {
+    const raw = "NG22 8TX 08:00-12:00 REF:FC1 ADDR:Unit 4, REF:not-a-real, Newark";
+    expect(parseStopLines(raw)[0].ref).toBe("FC1");
+    expect(serialiseStopLines(parseStopLines(raw))).toBe(raw);
+  });
+
+  it("round-trips an address containing a colon", () => {
+    const raw = "NG22 8TX 08:00-12:00 REF:FC1 ADDR:Gate 3: rear entrance";
+    expect(serialiseStopLines(parseStopLines(raw))).toBe(raw);
+  });
+
+  it("round-trips a stop with no time but with ref and address", () => {
+    const raw = "NG22 8TX REF:FC156297 ADDR:Unit 4, Newark";
+    expect(serialiseStopLines(parseStopLines(raw))).toBe(raw);
+  });
 });
 
 describe("canRoundTrip", () => {

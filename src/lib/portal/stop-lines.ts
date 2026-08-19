@@ -34,11 +34,16 @@ function splitLines(rawText: string): string[] {
     .filter(Boolean);
 }
 
-/** Pull a `REF:` / `ADDR:` value off a line. REF stops at ADDR; ADDR runs on. */
+/** Pull a `REF:` / `ADDR:` value off a line. REF is bounded to the region
+ *  before `ADDR:` so a literal "REF:" inside an address can't be mistaken
+ *  for the reference; ADDR runs to end of line. */
 function readTag(line: string, tag: "REF" | "ADDR"): string {
-  const re =
-    tag === "REF" ? /\bREF:(.*?)(?=\s*\bADDR:|$)/i : /\bADDR:(.*)$/i;
-  const m = line.match(re);
+  if (tag === "ADDR") {
+    const m = line.match(/\bADDR:(.*)$/i);
+    return m ? m[1].trim() : "";
+  }
+  const head = line.split(/\bADDR:/i)[0];
+  const m = head.match(/\bREF:(.*)$/i);
   return m ? m[1].trim() : "";
 }
 

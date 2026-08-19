@@ -105,10 +105,11 @@ export function parseStopsWithTimes(rawText: string): StopWithTime[] {
   for (const line of lines) {
     const pc = extractPostcode(line);
     if (pc) {
+      const win = parseStopWindow(line);
       out.push({
         postcode: pc,
-        time: parseStopTime(line),
-        windowEnd: parseStopWindow(line)?.to ?? null,
+        time: win?.from ?? parseStopTime(line),
+        windowEnd: win?.to ?? null,
       });
     }
   }

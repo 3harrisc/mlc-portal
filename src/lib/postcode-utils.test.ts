@@ -68,4 +68,12 @@ describe("parseStopsWithTimes", () => {
       { postcode: "GU11 2HL", time: null, windowEnd: null },
     ]);
   });
+
+  it("resolves time and windowEnd from the same range", () => {
+    // A stray time before a range must not produce a window that closes
+    // before it opens — `time` is the range's start, not the first HH:MM.
+    expect(parseStopsWithTimes("NG22 8TX 14:00 08:00-12:00")).toEqual([
+      { postcode: "NG22 8TX", time: "08:00", windowEnd: "12:00" },
+    ]);
+  });
 });

@@ -20,7 +20,7 @@ import {
 } from "./loads";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { timeToMinutes } from "@/lib/time-utils";
-import type { PlannedRun } from "@/types/runs";
+import { rowToRun, runToRow, type PlannedRun } from "@/types/runs";
 
 function run(p: Partial<PlannedRun>): PlannedRun {
   return {
@@ -44,6 +44,9 @@ function run(p: Partial<PlannedRun>): PlannedRun {
     completedMeta: p.completedMeta,
     progress: p.progress,
     completedStopIndexes: p.completedStopIndexes,
+    statusOverride: p.statusOverride ?? null,
+    statusOverrideBy: p.statusOverrideBy,
+    statusOverrideAt: p.statusOverrideAt,
   };
 }
 
@@ -757,5 +760,41 @@ describe("deriveStatus — delivery window lateness", () => {
       progress: moving,
     });
     expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+});
+
+describe("rowToRun / runToRow — status override", () => {
+  it("reads the override off a row", () => {
+    const r = rowToRun({
+      id: "x",
+      date: "2026-04-30",
+      customer: "Consolid8",
+      from_postcode: "NG22 8TX",
+      status_override: "exception",
+      status_override_by: "user-uuid",
+      status_override_at: "2026-04-30T09:00:00Z",
+    });
+    expect(r.statusOverride).toBe("exception");
+    expect(r.statusOverrideBy).toBe("user-uuid");
+    expect(r.statusOverrideAt).toBe("2026-04-30T09:00:00Z");
+  });
+
+  it("defaults to no override when the columns are absent", () => {
+    const r = rowToRun({
+      id: "x",
+      date: "2026-04-30",
+      customer: "Consolid8",
+      from_postcode: "NG22 8TX",
+    });
+    expect(r.statusOverride).toBeNull();
+  });
+
+  it("writes the override back out", () => {
+    const row = runToRow(run({ statusOverride: "delayed" }));
+    expect(row.status_override).toBe("delayed");
+  });
+
+  it("writes null when there is no override", () => {
+    expect(runToRow(run({})).status_override).toBeNull();
   });
 });

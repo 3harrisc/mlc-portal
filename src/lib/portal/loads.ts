@@ -23,6 +23,9 @@ export function deriveStatus(
   todayISO: string,
   now: Date = new Date(),
 ): LoadStatus {
+  // An admin has pinned this status. Sticky — nothing automatic clears it.
+  if (run.statusOverride) return run.statusOverride;
+
   const stops = parseStops(run.rawText);
   const completed = completedCount(run);
 

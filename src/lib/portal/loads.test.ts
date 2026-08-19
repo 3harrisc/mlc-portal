@@ -798,3 +798,47 @@ describe("rowToRun / runToRow — status override", () => {
     expect(runToRow(run({})).status_override).toBeNull();
   });
 });
+
+describe("deriveStatus — manual override", () => {
+  const today = "2026-04-30";
+
+  it("wins over the derived status", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL",
+      statusOverride: "exception",
+    });
+    expect(deriveStatus(r, today)).toBe("exception");
+  });
+
+  it("wins even over a fully delivered run", () => {
+    const r = run({
+      date: today,
+      rawText: "GU11 2HL",
+      completedStopIndexes: [0],
+      statusOverride: "in-transit",
+    });
+    expect(deriveStatus(r, today)).toBe("in-transit");
+  });
+
+  it("wins over window lateness", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      statusOverride: "in-transit",
+    });
+    expect(deriveStatus(r, today, new Date("2026-04-30T12:00:00Z"))).toBe("in-transit");
+  });
+
+  it("falls through to derivation when cleared", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL",
+      statusOverride: null,
+    });
+    expect(deriveStatus(r, today)).toBe("loading");
+  });
+});

@@ -283,3 +283,32 @@ area and are the natural home for:
   result, including over `delivered`; `null` falls through to derivation.
 - `StopsEditor` round-trip — parse, edit, serialise preserves `ADDR:` and
   `REF:` metadata, and reordering rows moves windows with their stop.
+
+---
+
+## Part 3 — Collection times on the public tracker
+
+Added after the original design review.
+
+`/track/[token]` already renders arrived / departed / on-site times for every
+drop, but the collection point gets only an inline pill. That pill shows
+"Loading at {postcode} - since {HH:MM}" while on site and
+"Collected {HH:MM} - en route" afterwards, so the **arrival** time at the
+collection point — which `collectionTimes()` already computes as
+`arrivedAt` — is never displayed at all.
+
+The authenticated load page already treats collection as a proper leg with
+both times (`src/app/portal/loads/[id]/page.tsx:604`). This ports that
+treatment to the public tracker:
+
+- A collection row at the head of the Stops list, badged `C`, showing
+  `Arrived` / `Departed`, or `Loading since` while the lorry is on site.
+- Badge reads **Loading** (blue) on site, **Collected** (green) once departed.
+- The Stops card's render condition widens from `stops.length > 0` to also
+  fire when collection has happened, so a backload with no parsed drops still
+  shows its collection times.
+- The existing inline pill stays — it is the at-a-glance summary; the row is
+  the detail.
+
+No new data, no schema change: `collectionTimes()` already returns everything
+needed.

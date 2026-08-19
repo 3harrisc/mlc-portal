@@ -9,6 +9,15 @@ import { ensureCustomer } from "@/lib/customer-contacts";
 import { sendNotification } from "@/lib/email/notifications";
 import { bookingReceivedEmail } from "@/lib/email/templates";
 import { pinConsolid8SameDayBackloads } from "@/lib/email-parse/consolid8-rules";
+import { extractJsonObject } from "@/lib/email-parse/claude-json";
+
+/**
+ * Parsing an inbound email means a Claude call (with up to three retries and
+ * exponential backoff) plus geocoding, which comfortably outruns the platform
+ * default. A timeout kills the request before the handler can write to
+ * email_logs, so a slow email used to vanish without leaving a trace.
+ */
+export const maxDuration = 60;
 
 const DEFAULT_PROGRESS = {
   completedIdx: [],
@@ -353,18 +362,9 @@ ${emailBody}${excelText ? `\n\n--- ATTACHED EXCEL DATA ---\n${excelText}` : ""}`
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
-  // Extract JSON from response (handle potential markdown fences)
-  let jsonStr = text.trim();
-  if (jsonStr.startsWith("```")) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-  }
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch {
-    throw new Error(`Failed to parse Claude response as JSON: ${text.slice(0, 200)}`);
-  }
+  // Claude fences the JSON and sometimes explains itself afterwards — see
+  // extractJsonObject for the shapes it tolerates.
+  const parsed = extractJsonObject(text) as any;
 
   // Handle both multi-run and legacy single-run format
   if (parsed.runs && Array.isArray(parsed.runs)) {

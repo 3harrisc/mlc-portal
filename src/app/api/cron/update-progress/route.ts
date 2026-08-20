@@ -3,6 +3,11 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { normVehicle } from "@/lib/webfleet";
 import type { ProgressState } from "@/types/runs";
 import {
+  addDaysISO,
+  isTrackable,
+  MAX_TRIP_LOOKBACK_DAYS,
+} from "@/lib/portal/tracking-window";
+import {
   COMPLETION_RADIUS_METERS,
   MIN_STANDSTILL_MINS,
   STANDSTILL_MATCH_RADIUS_METERS,
@@ -97,7 +102,8 @@ export async function GET(req: Request) {
   const sb = getSupabaseAdmin();
 
   try {
-    // 1. Fetch runs that need tracking: today's runs + yesterday's incomplete runs
+    // 1. Fetch runs that need tracking: today's runs, yesterday's incomplete
+    //    runs, and multi-day trips still inside their declared day_count span
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
@@ -106,7 +112,16 @@ export async function GET(req: Request) {
     // customer-facing `loads`). Each row is tagged with `_source` so the
     // update path knows which table to write back to. Cross-day backloads
     // where collection_date is today/yesterday are included.
-    const dateFilter = `date.in.(${today},${yesterday}),collection_date.in.(${today},${yesterday})`;
+    // Multi-day trips carry `day_count`, so their `date` can be well before
+    // today. Postgres can't express "date + day_count > today" in a PostgREST
+    // filter, so we widen the fetch to the lookback backstop and let
+    // `isTrackable` make the real per-row decision below.
+    const earliestTrip = addDaysISO(today, -MAX_TRIP_LOOKBACK_DAYS);
+    const dateFilter = [
+      `date.in.(${today},${yesterday})`,
+      `collection_date.in.(${today},${yesterday})`,
+      `and(day_count.gt.1,date.gte.${earliestTrip},date.lte.${today})`,
+    ].join(",");
     const [runsRes, loadsRes] = await Promise.all([
       sb.from("runs").select("*").or(dateFilter).neq("vehicle", ""),
       sb.from("loads").select("*").or(dateFilter).neq("vehicle", ""),
@@ -141,17 +156,22 @@ export async function GET(req: Request) {
       });
     }
 
-    // Filter out yesterday's runs that are already fully complete
+    // Decide per row whether we should still be geofencing it. See
+    // lib/portal/tracking-window for why past-dated runs need the
+    // "unfinished" guard.
     const activeRuns = runs.filter((r: any) => {
       // Skip vehicles with no tracker — these are manually managed
       if (normVehicle(r.vehicle) === "NOTRACKER") return false;
-      if (r.date === today) return true;
-      // Cross-day backload: collection is today — keep for collection tracking
-      if (r.collection_date === today) return true;
-      // Yesterday's run — only keep if it has uncompleted stops
       const stops = parseStops(r.raw_text ?? "");
       const completed = r.completed_stop_indexes ?? [];
-      return stops.length > 0 && completed.length < stops.length;
+      return isTrackable({
+        date: r.date,
+        collectionDate: r.collection_date,
+        dayCount: r.day_count,
+        hasUncompletedStops: stops.length > 0 && completed.length < stops.length,
+        today,
+        yesterday,
+      });
     });
 
     if (!activeRuns.length) {

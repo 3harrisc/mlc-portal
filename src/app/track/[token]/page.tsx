@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { rowToRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
-import { parseStops, normalizePostcode } from "@/lib/postcode-utils";
+import {
+  parseStops,
+  parseStopsWithTimes,
+  normalizePostcode,
+} from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
 import {
   collectionTimes,
@@ -58,6 +62,11 @@ export default async function PublicTrackPage({ params }: PageProps) {
   const run = rowToRun(row);
   const status = deriveStatus(run, todayISO());
   const stops = parseStops(run.rawText);
+  // Booked time / window per stop, index-aligned with `stops`.
+  const stopTimes = parseStopsWithTimes(run.rawText);
+  // Collection-point geofence state. Used by both the inline summary pill
+  // and the collection row at the head of the stops list.
+  const collection = collectionTimes(run);
   const completedIdx = new Set([
     ...(run.completedStopIndexes ?? []),
     ...(run.progress?.completedIdx ?? []),
@@ -161,7 +170,7 @@ export default async function PublicTrackPage({ params }: PageProps) {
           {(() => {
             // Collection status: while the lorry is on site at the collection
             // point show "Loading", then "Collected · en route" once it leaves.
-            const c = collectionTimes(run);
+            const c = collection;
             if (!c.loading && !c.departed) return null;
             const loading = c.loading;
             return (
@@ -258,7 +267,7 @@ export default async function PublicTrackPage({ params }: PageProps) {
           what customers use for their on-time-arrival KPIs, so it has to
           render on the public share view as well as the authenticated
           /portal/loads/[id] page. */}
-      {stops.length > 0 && (
+      {(stops.length > 0 || collection.arrivedAt || collection.loading) && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-header">
             <h3>Stops</h3>
@@ -277,9 +286,123 @@ export default async function PublicTrackPage({ params }: PageProps) {
                 gap: 8,
               }}
             >
+              {(collection.arrivedAt || collection.departedAt || collection.loading) && (
+                <li
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "8px 10px",
+                    border: collection.loading
+                      ? "1px solid var(--mlc-blue)"
+                      : "1px solid var(--line)",
+                    borderRadius: 6,
+                    background: collection.loading
+                      ? "var(--mlc-blue-50, #eef4ff)"
+                      : collection.departed
+                        ? "var(--ok-bg, #e8f5e9)"
+                        : "var(--surface-alt, #fafafa)",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "50%",
+                      background: collection.loading
+                        ? "var(--mlc-blue)"
+                        : collection.departed
+                          ? "var(--ok)"
+                          : "var(--ink-500)",
+                      color: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      flexShrink: 0,
+                    }}
+                  >
+                    C
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="bold mono" style={{ fontSize: 12.5 }}>
+                      {run.fromPostcode}
+                    </div>
+                    <div className="muted" style={{ fontSize: 10.5 }}>
+                      Collection point
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        marginTop: 4,
+                        fontSize: 11,
+                      }}
+                    >
+                      {collection.arrivedAt && (
+                        <span className="mono">
+                          <span className="muted">Arrived</span>{" "}
+                          <span className="bold">{collection.arrivedAt}</span>
+                        </span>
+                      )}
+                      {collection.departedAt && (
+                        <span className="mono">
+                          <span className="muted">Departed</span>{" "}
+                          <span className="bold">{collection.departedAt}</span>
+                        </span>
+                      )}
+                      {collection.loading && collection.loadingSince && (
+                        <span className="mono" style={{ color: "var(--mlc-blue)" }}>
+                          <span className="muted">Loading since</span>{" "}
+                          <span className="bold">{collection.loadingSince}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {collection.loading ? (
+                    <span
+                      style={{
+                        background: "var(--mlc-blue)",
+                        color: "#fff",
+                        padding: "2px 8px",
+                        borderRadius: 99,
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Loading
+                    </span>
+                  ) : collection.departed ? (
+                    <span
+                      style={{
+                        background: "var(--ok)",
+                        color: "#fff",
+                        padding: "2px 8px",
+                        borderRadius: 99,
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Collected
+                    </span>
+                  ) : null}
+                </li>
+              )}
               {stops.map((pc, i) => {
                 const done = completedIdx.has(i);
                 const site = legSiteTimes(run, i);
+                // The slot this stop is booked into: "08:00-12:00" for a
+                // window, "12:30" for a fixed booking, null for neither.
+                const booked = stopTimes[i];
+                const bookedLabel = booked?.time
+                  ? booked.windowEnd
+                    ? `${booked.time}–${booked.windowEnd}`
+                    : booked.time
+                  : null;
                 return (
                   <li
                     key={`${pc}-${i}`}
@@ -324,7 +447,8 @@ export default async function PublicTrackPage({ params }: PageProps) {
                       <div className="bold mono" style={{ fontSize: 12.5 }}>
                         {pc}
                       </div>
-                      {(site.arrivedAt ||
+                      {(bookedLabel ||
+                        site.arrivedAt ||
                         site.departedAt ||
                         site.onSite) && (
                         <div
@@ -336,6 +460,12 @@ export default async function PublicTrackPage({ params }: PageProps) {
                             fontSize: 11,
                           }}
                         >
+                          {bookedLabel && (
+                            <span className="mono">
+                              <span className="muted">Booked</span>{" "}
+                              <span className="bold">{bookedLabel}</span>
+                            </span>
+                          )}
                           {site.arrivedAt && (
                             <span className="mono">
                               <span className="muted">Arrived</span>{" "}

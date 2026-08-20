@@ -31,6 +31,12 @@ export function parseStops(rawText: string): string[] {
   return out;
 }
 
+/** `HH:MM` in 24hr, hour optionally unpadded. Capturing: hour, minute. */
+const TIME_SRC = String.raw`([01]?\d|2[0-3]):([0-5]\d)`;
+
+/** A range: two times joined by a hyphen / en-dash / em-dash. */
+const WINDOW_RE = new RegExp(String.raw`\b${TIME_SRC}\s*[-–—]\s*${TIME_SRC}\b`);
+
 /**
  * Extract the booking/delivery time on a single raw_text line, e.g.
  * "GU11 2HL 12:30 REF:FC156297 ADDR:…" → "12:30".
@@ -46,10 +52,42 @@ export function parseStopTime(line: string): string | null {
   return m ? `${m[1].padStart(2, "0")}:${m[2]}` : null;
 }
 
+export interface StopWindow {
+  /** Start of the window, "HH:MM". Also what `parseStopTime` returns. */
+  from: string;
+  /** End of the window, "HH:MM". */
+  to: string;
+}
+
+/**
+ * Extract a delivery window from a raw_text stop line, e.g.
+ * "NG22 8TX 08:00-12:00 REF:FC1" → { from: "08:00", to: "12:00" }.
+ *
+ * Like `parseStopTime`, only the portion of the line BEFORE any REF:/ADDR:
+ * marker is scanned, so a hyphenated reference or a time-shaped fragment
+ * inside an address can never be mistaken for a window.
+ *
+ * Returns null when the line carries a single time or no time at all — a
+ * malformed range (e.g. "08:00-25:00") also degrades to null, and
+ * `parseStopTime` still picks up the valid leading "08:00".
+ */
+export function parseStopWindow(line: string): StopWindow | null {
+  const head = (line || "").split(/\bREF:|\bADDR:/i)[0];
+  const m = head.match(WINDOW_RE);
+  if (!m) return null;
+  return {
+    from: `${m[1].padStart(2, "0")}:${m[2]}`,
+    to: `${m[3].padStart(2, "0")}:${m[4]}`,
+  };
+}
+
 export interface StopWithTime {
   postcode: string;
-  /** Booking/delivery time parsed from the same line, or null. */
+  /** Booking/delivery time parsed from the same line, or null. For a
+   *  windowed stop this is the window START. */
   time: string | null;
+  /** End of the delivery window when the line carries a range, else null. */
+  windowEnd: string | null;
 }
 
 /**
@@ -66,7 +104,14 @@ export function parseStopsWithTimes(rawText: string): StopWithTime[] {
   const out: StopWithTime[] = [];
   for (const line of lines) {
     const pc = extractPostcode(line);
-    if (pc) out.push({ postcode: pc, time: parseStopTime(line) });
+    if (pc) {
+      const win = parseStopWindow(line);
+      out.push({
+        postcode: pc,
+        time: win?.from ?? parseStopTime(line),
+        windowEnd: win?.to ?? null,
+      });
+    }
   }
   return out;
 }

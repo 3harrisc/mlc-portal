@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { rowToRun, type PlannedRun } from "@/types/runs";
 import { todayISO } from "@/lib/time-utils";
-import { parseStops } from "@/lib/postcode-utils";
+import { parseStops, parseStopsWithTimes } from "@/lib/postcode-utils";
 import { useAuth } from "@/components/AuthProvider";
 import { useNicknames } from "@/hooks/useNicknames";
 import { useDriversByVehicle, lookupDriver } from "@/hooks/useDriversByVehicle";
@@ -15,7 +15,12 @@ import { useVehiclePositions } from "@/hooks/useVehiclePositions";
 import { normVehicle } from "@/lib/webfleet";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
-import { deleteLoad, setLoadVehicle, updateLoad } from "@/app/actions/loads";
+import {
+  deleteLoad,
+  setLoadStatusOverride,
+  setLoadVehicle,
+  updateLoad,
+} from "@/app/actions/loads";
 import LoadEditModal, {
   type LoadEdits,
 } from "@/components/portal/LoadEditModal";
@@ -23,6 +28,8 @@ import { listVehicles } from "@/app/actions/fleet";
 import { buildRoutePlan, type RoutePlan, type PlanLeg } from "@/lib/portal/route-plan";
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
+import StageOverrideControl from "@/components/portal/StageOverrideControl";
+import { STATUS_LABEL, type LoadStatus } from "@/lib/portal/status";
 import PortalMap, {
   type MapPin,
   type MapRoute,
@@ -325,7 +332,33 @@ function LoadDetailView({
   };
   const today = todayISO();
   const status = deriveStatus(run, today);
+  // What the status would be with no override — shown in the Auto option so
+  // an admin can see what they're overriding before they commit.
+  const derivedStatus = deriveStatus({ ...run, statusOverride: null }, today);
+  const [savingStage, setSavingStage] = useState(false);
+
+  async function handleStageChange(next: LoadStatus | null) {
+    setSavingStage(true);
+    const res = await setLoadStatusOverride(run.id, next);
+    setSavingStage(false);
+    if (res.error) {
+      showToast(`Couldn't set stage: ${res.error}`, "err");
+      return;
+    }
+    onRunChange({
+      ...run,
+      statusOverride: next,
+      statusOverrideAt: next ? new Date().toISOString() : undefined,
+      statusOverrideBy: next ? profile?.id : undefined,
+    });
+    showToast(next ? `Stage pinned to ${STATUS_LABEL[next]}` : "Stage back on auto");
+  }
   const stops = useMemo(() => parseStops(run.rawText), [run.rawText]);
+  // Booked time / window per stop, index-aligned with `stops`.
+  const stopTimes = useMemo(
+    () => parseStopsWithTimes(run.rawText),
+    [run.rawText],
+  );
   // Canonical "what does this load look like on the road" plan. Folds in
   // the customer's base postcode so Ashwood-style multi-drop runs render
   // their depot as the collection point and every parsed stop as a drop.
@@ -433,7 +466,18 @@ function LoadDetailView({
             <Link href="/portal/loads" className="btn sm ghost">
               <Icon name="chevL" size={12} /> Back to loads
             </Link>
-            <StatusPill status={status} />
+            <div style={{ display: "grid", gap: 3, justifyItems: "start" }}>
+              <StatusPill status={status} />
+              <StageOverrideControl
+                override={run.statusOverride ?? null}
+                overrideBy={run.statusOverrideBy}
+                overrideAt={run.statusOverrideAt}
+                derived={derivedStatus}
+                isAdmin={isAdmin}
+                saving={savingStage}
+                onChange={handleStageChange}
+              />
+            </div>
             {run.runType === "backload" && (
               <span className="pill scheduled">
                 <span className="dot" />
@@ -610,6 +654,15 @@ function LoadDetailView({
                   // Collection reads as "done" (green) once the lorry departs.
                   const originLoaded = isOrigin && collection.departed;
                   const doneLike = done || originLoaded;
+                  // The slot this stop is booked into: "08:00-12:00" for a
+                  // window, "12:30" for a fixed booking, null for neither.
+                  const booked =
+                    leg.stopIndex != null ? stopTimes[leg.stopIndex] : undefined;
+                  const bookedLabel = booked?.time
+                    ? booked.windowEnd
+                      ? `${booked.time}–${booked.windowEnd}`
+                      : booked.time
+                    : null;
                   return (
                     <li
                       key={`${leg.postcode}-${i}-${leg.kind}`}
@@ -665,11 +718,17 @@ function LoadDetailView({
                         </div>
                         {/* Arrived / departed / on-site times — only shown
                             for real stops with at least one timestamp. */}
-                        {(site.arrivedAt || site.departedAt || site.onSite) && (
+                        {(bookedLabel || site.arrivedAt || site.departedAt || site.onSite) && (
                           <div
                             className="row gap-12"
                             style={{ marginTop: 4, flexWrap: "wrap", fontSize: 11 }}
                           >
+                            {bookedLabel && (
+                              <span className="mono">
+                                <span className="muted">Booked</span>{" "}
+                                <span className="bold">{bookedLabel}</span>
+                              </span>
+                            )}
                             {site.arrivedAt && (
                               <span className="mono">
                                 <span className="muted">Arrived</span>{" "}

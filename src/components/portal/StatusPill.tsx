@@ -1,21 +1,10 @@
 import type { CSSProperties } from "react";
+import { STATUS_LABEL, type LoadStatus } from "@/lib/portal/status";
 
-export type LoadStatus =
-  | "in-transit"
-  | "delivered"
-  | "scheduled"
-  | "exception"
-  | "delayed"
-  | "loading";
-
-export const STATUS_LABEL: Record<LoadStatus, string> = {
-  "in-transit": "In transit",
-  delivered: "Delivered",
-  scheduled: "Scheduled",
-  exception: "Exception",
-  delayed: "Delayed",
-  loading: "Loading",
-};
+// Re-exported so the many existing `from "@/components/portal/StatusPill"`
+// import sites keep working now that the enum lives in lib/.
+export { STATUS_LABEL };
+export type { LoadStatus };
 
 interface StatusPillProps {
   status: LoadStatus;

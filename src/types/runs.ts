@@ -1,3 +1,5 @@
+import type { LoadStatus } from "@/lib/portal/status";
+
 export type CustomerKey = string;
 
 export type Customer = {
@@ -60,6 +62,11 @@ export type PlannedRun = {
   invoiceStatus?: InvoiceStatus;
   xeroInvoiceId?: string;
   xeroExportedAt?: string; // ISO timestamp
+  // Manual stage override (migration 018). null / undefined = derive the
+  // status automatically from progress. Sticky until an admin clears it.
+  statusOverride?: LoadStatus | null;
+  statusOverrideBy?: string;
+  statusOverrideAt?: string; // ISO timestamp
 };
 
 export type ProgressState = {
@@ -148,6 +155,9 @@ export function rowToRun(row: any): PlannedRun {
     invoiceStatus: (row.invoice_status as InvoiceStatus) ?? "open",
     xeroInvoiceId: row.xero_invoice_id ?? undefined,
     xeroExportedAt: row.xero_exported_at ?? undefined,
+    statusOverride: (row.status_override as LoadStatus | null) ?? null,
+    statusOverrideBy: row.status_override_by ?? undefined,
+    statusOverrideAt: row.status_override_at ?? undefined,
   };
 }
 
@@ -189,6 +199,9 @@ export function runToRow(run: PlannedRun, userId?: string) {
     invoice_status: run.invoiceStatus ?? "open",
     xero_invoice_id: run.xeroInvoiceId ?? null,
     xero_exported_at: run.xeroExportedAt ?? null,
+    status_override: run.statusOverride ?? null,
+    status_override_by: run.statusOverrideBy ?? null,
+    status_override_at: run.statusOverrideAt ?? null,
   };
 }
 

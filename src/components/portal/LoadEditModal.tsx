@@ -19,7 +19,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { PlannedRun, RunType } from "@/types/runs";
+import {
+  canRoundTrip,
+  parseStopLines,
+  serialiseStopLines,
+  type StopLine,
+} from "@/lib/portal/stop-lines";
 import Icon from "./Icon";
+import StopsEditor from "./StopsEditor";
 
 export interface LoadEdits {
   date: string;
@@ -49,13 +56,24 @@ export default function LoadEditModal({
   onSave: (edits: LoadEdits) => Promise<void>;
 }) {
   const [edits, setEdits] = useState<LoadEdits>(() => seedFromRun(run));
+  // Structured stop rows, mirrored back into edits.rawText on every change so
+  // the modal's save path (which hands back LoadEdits.rawText) is untouched.
+  const [stopRows, setStopRows] = useState<StopLine[]>(() =>
+    parseStopLines(run.rawText ?? ""),
+  );
+  // Fall back to the raw textarea when a line can't be modelled as a stop
+  // row — otherwise opening the modal would silently delete it.
+  const [rawMode, setRawMode] = useState(() => !canRoundTrip(run.rawText ?? ""));
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // Reset the form whenever the modal is re-opened against a different run.
   // Without this, a save-then-reopen would show stale fields if the parent
   // updated the run between toggles.
   useEffect(() => {
-    if (open) setEdits(seedFromRun(run));
+    if (!open) return;
+    setEdits(seedFromRun(run));
+    setStopRows(parseStopLines(run.rawText ?? ""));
+    setRawMode(!canRoundTrip(run.rawText ?? ""));
   }, [open, run]);
 
   // Esc to close, click-outside to dismiss — same dismiss model as the
@@ -74,6 +92,11 @@ export default function LoadEditModal({
 
   function update<K extends keyof LoadEdits>(key: K, value: LoadEdits[K]) {
     setEdits((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateStops(next: StopLine[]) {
+    setStopRows(next);
+    setEdits((prev) => ({ ...prev, rawText: serialiseStopLines(next) }));
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -239,18 +262,55 @@ export default function LoadEditModal({
               </Field>
             </div>
 
-            <Field label="Stops (one postcode per line, in order)">
-              <textarea
-                value={edits.rawText}
-                onChange={(e) => update("rawText", e.target.value)}
-                disabled={saving}
-                rows={Math.max(4, Math.min(12, edits.rawText.split("\n").length + 1))}
-                className="input mono"
-                style={{ minHeight: 96, padding: 8, lineHeight: 1.45 }}
-              />
-              <span className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                Reorder by moving lines around — chain ETA recomputes on save.
-              </span>
+            <Field label="Stops">
+              {rawMode ? (
+                <>
+                  <textarea
+                    value={edits.rawText}
+                    onChange={(e) => update("rawText", e.target.value)}
+                    disabled={saving}
+                    rows={Math.max(4, Math.min(12, edits.rawText.split("\n").length + 1))}
+                    className="input mono"
+                    style={{ minHeight: 96, padding: 8, lineHeight: 1.45 }}
+                  />
+                  <span className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                    One stop per line:{" "}
+                    <span className="mono">NG22 8TX 08:00-12:00</span>. Reorder
+                    by moving lines around — chain ETA recomputes on save.
+                  </span>
+                  {canRoundTrip(edits.rawText) && (
+                    <button
+                      type="button"
+                      className="btn sm ghost"
+                      onClick={() => {
+                        setStopRows(parseStopLines(edits.rawText));
+                        setRawMode(false);
+                      }}
+                      disabled={saving}
+                      style={{ justifySelf: "start", marginTop: 4 }}
+                    >
+                      Switch to stop rows
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <StopsEditor
+                    stops={stopRows}
+                    disabled={saving}
+                    onChange={updateStops}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm ghost"
+                    onClick={() => setRawMode(true)}
+                    disabled={saving}
+                    style={{ justifySelf: "start", marginTop: 4 }}
+                  >
+                    Edit as raw text
+                  </button>
+                </>
+              )}
             </Field>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

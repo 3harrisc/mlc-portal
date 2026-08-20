@@ -734,6 +734,28 @@ describe("deriveStatus — delivery window lateness", () => {
     });
     expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
   });
+
+  it("skips an overnight window rather than flagging it permanently late", () => {
+    // 22:00–02:00 is a legitimate slot, but "now > 02:00" is true for most
+    // of the day. Without the guard this load would read delayed from 02:01.
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 22:00-02:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("skips an inverted window (a typo) rather than flagging it late", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 12:00-08:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
 });
 ```
 
@@ -789,9 +811,15 @@ export function deriveStatus(
 function pastWindowEnd(run: PlannedRun, now: Date): boolean {
   const idx = nextOutstandingIndex(run);
   if (idx == null) return false;
-  const end = parseStopsWithTimes(run.rawText)[idx]?.windowEnd;
-  const endMins = timeToMinutes(end ?? undefined);
-  if (endMins == null) return false;
+  const stop = parseStopsWithTimes(run.rawText)[idx];
+  const startMins = timeToMinutes(stop?.time ?? undefined);
+  const endMins = timeToMinutes(stop?.windowEnd ?? undefined);
+  if (startMins == null || endMins == null) return false;
+  // A window that doesn't close after it opens has no meaningful "past the
+  // end" on a single day's clock: an overnight slot (22:00–02:00) is
+  // legitimate, and an inverted one (12:00–08:00) is a typo. Either way,
+  // skip the rule rather than marking the load permanently late.
+  if (endMins <= startMins) return false;
   return ukMinutesOfDay(now) > endMins;
 }
 ```
@@ -2135,10 +2163,27 @@ Expected: all pass.
 - [ ] **Step 2: Types and lint**
 
 ```bash
-npx tsc --noEmit && npm run lint
+npx tsc --noEmit
 ```
 
 Expected: clean.
+
+```bash
+npm run lint
+```
+
+The repo has a **pre-existing** lint baseline of 90 problems (71 errors, 19
+warnings) as of `46ff20f` — mostly `react-hooks/set-state-in-effect` and
+`@typescript-eslint/no-explicit-any`. "Clean" is therefore not the bar and
+never was; the bar is **no new problems**. Compare against the baseline:
+
+```bash
+git stash -u && git checkout 46ff20f && npm run lint 2>&1 | grep '^✖'
+git checkout - && git stash pop && npm run lint 2>&1 | grep '^✖'
+```
+
+Expected: the same count both times. Fixing the pre-existing baseline is
+out of scope for this work.
 
 - [ ] **Step 3: Production build**
 

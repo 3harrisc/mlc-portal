@@ -16,6 +16,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun, runToRow } from "@/types/runs";
+import type { LoadStatus } from "@/lib/portal/status";
 
 async function getUser() {
   const supabase = await createClient();
@@ -259,4 +260,38 @@ export async function copyLoadToPlanner(
   if (insertErr) return { error: insertErr.message };
 
   return { runId: newRunId, jobNumber };
+}
+
+/**
+ * Pin or clear the manual stage override on a load.
+ *
+ * Admin-only, re-checked server-side. The client's `isAdmin` flag decides
+ * whether to RENDER the control; it must never be what decides whether the
+ * write is allowed — same posture as `deleteLoads`.
+ *
+ * Passing `null` clears the override and the audit stamps with it, handing
+ * the row back to automatic derivation.
+ */
+export async function setLoadStatusOverride(
+  id: string,
+  status: LoadStatus | null,
+) {
+  const { supabase, user } = await getUser();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "admin") return { error: "Admin role required" };
+
+  const { error } = await supabase
+    .from("loads")
+    .update({
+      status_override: status,
+      status_override_by: status ? user.id : null,
+      status_override_at: status ? new Date().toISOString() : null,
+    })
+    .eq("id", id);
+  if (error) return { error: error.message };
+  return { success: true };
 }

@@ -8,17 +8,19 @@
 import { describe, it, expect } from "vitest";
 import {
   bookedDeliverySlot,
+  bookedDeliveryWindow,
   collectionTimes,
   deliveryEta,
   deriveStatus,
   displayDestination,
   legSiteTimes,
   liveEtaToNextStop,
+  nextOutstandingIndex,
   quickEta,
 } from "./loads";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { timeToMinutes } from "@/lib/time-utils";
-import type { PlannedRun } from "@/types/runs";
+import { rowToRun, runToRow, type PlannedRun } from "@/types/runs";
 
 function run(p: Partial<PlannedRun>): PlannedRun {
   return {
@@ -42,6 +44,9 @@ function run(p: Partial<PlannedRun>): PlannedRun {
     completedMeta: p.completedMeta,
     progress: p.progress,
     completedStopIndexes: p.completedStopIndexes,
+    statusOverride: p.statusOverride ?? null,
+    statusOverrideBy: p.statusOverrideBy,
+    statusOverrideAt: p.statusOverrideAt,
   };
 }
 
@@ -584,5 +589,256 @@ describe("deriveStatus — collection departure", () => {
       },
     });
     expect(deriveStatus(r, today)).toBe("in-transit");
+  });
+});
+
+describe("nextOutstandingIndex", () => {
+  it("is 0 when nothing is done", () => {
+    const r = run({ rawText: "NG22 8TX\nBS20 7XN" });
+    expect(nextOutstandingIndex(r)).toBe(0);
+  });
+
+  it("skips stops completed via either source", () => {
+    const r = run({
+      rawText: "NG22 8TX\nBS20 7XN\nGU11 2HL",
+      completedStopIndexes: [0],
+      progress: {
+        completedIdx: [1],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+      },
+    });
+    expect(nextOutstandingIndex(r)).toBe(2);
+  });
+
+  it("is null when every stop is done", () => {
+    const r = run({ rawText: "NG22 8TX", completedStopIndexes: [0] });
+    expect(nextOutstandingIndex(r)).toBeNull();
+  });
+
+  it("is null when there are no stops", () => {
+    expect(nextOutstandingIndex(run({ rawText: "" }))).toBeNull();
+  });
+});
+
+describe("bookedDeliveryWindow", () => {
+  it("returns the window on the last windowed stop", () => {
+    const r = run({ rawText: "NG22 8TX 06:00-07:00\nBS20 7XN 08:00-12:00" });
+    expect(bookedDeliveryWindow(r)).toEqual({ from: "08:00", to: "12:00" });
+  });
+
+  it("is null when stops carry point times only", () => {
+    const r = run({ rawText: "NG22 8TX 08:00\nBS20 7XN 14:00" });
+    expect(bookedDeliveryWindow(r)).toBeNull();
+  });
+
+  it("is null when there are no stops", () => {
+    expect(bookedDeliveryWindow(run({ rawText: "" }))).toBeNull();
+  });
+});
+
+describe("liveEtaToNextStop — window floor", () => {
+  // The spec claims the ETA floor needs no new code: parseStopTime already
+  // returns the window START, which is what liveEtaToNextStop floors at.
+  // That's a load-bearing claim, so pin it down.
+  const coords = new Map([["GU11 2HL", { lat: 51.25, lng: -0.76 }]]);
+  // Effectively on top of the stop, so travel time is ~0 and the floor is
+  // the only thing that can move the answer.
+  const truckPos = { lat: 51.25, lng: -0.76 };
+
+  it("never promises earlier than the window opens", () => {
+    const r = run({ rawText: "GU11 2HL 08:00-12:00" });
+    // 06:00 UK — two hours before the window opens.
+    const now = new Date("2026-04-30T05:00:00Z");
+    expect(liveEtaToNextStop(r, { truckPos, coords, now })).toBe("08:00");
+  });
+
+  it("reports the real arrival once the window is open", () => {
+    const r = run({ rawText: "GU11 2HL 08:00-12:00" });
+    // 09:30 UK — inside the window, so the projection wins over the floor.
+    const now = new Date("2026-04-30T08:30:00Z");
+    expect(liveEtaToNextStop(r, { truckPos, coords, now })).toBe("09:30");
+  });
+});
+
+describe("deriveStatus — delivery window lateness", () => {
+  const today = "2026-04-30";
+  /** 13:00 UK on the test's "today". BST, so 12:00Z. */
+  const afterWindow = new Date("2026-04-30T12:00:00Z");
+  /** 09:00 UK on the test's "today". */
+  const insideWindow = new Date("2026-04-30T08:00:00Z");
+
+  const moving = {
+    completedIdx: [],
+    onSiteIdx: null,
+    onSiteSinceMs: null,
+    lastInside: false,
+    collectDepartedISO: "2026-04-30T06:00:00Z",
+  };
+
+  it("stays in-transit while inside the window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, insideWindow)).toBe("in-transit");
+  });
+
+  it("flips to delayed once the window has closed", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("delayed");
+  });
+
+  it("flags a load still loading past its window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("delayed");
+  });
+
+  it("ignores the window on a stop that is already done", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00\nBS20 7XN 20:00-22:00",
+      completedStopIndexes: [0],
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("does not apply the window rule to a load dated in the past", () => {
+    // Yesterday's load, still moving, past a window that closed at 12:00.
+    // The window rule is gated to today, so this must stay in-transit —
+    // if the gate were missing it would read "delayed".
+    const r = run({
+      date: "2026-04-29",
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("is unaffected when the stop has no window", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("skips an overnight window rather than flagging it permanently late", () => {
+    // 22:00–02:00 is a legitimate slot, but "now > 02:00" is true for most
+    // of the day. Without the guard this load would read delayed from 02:01.
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 22:00-02:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+
+  it("skips an inverted window (a typo) rather than flagging it late", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 12:00-08:00",
+      progress: moving,
+    });
+    expect(deriveStatus(r, today, afterWindow)).toBe("in-transit");
+  });
+});
+
+describe("rowToRun / runToRow — status override", () => {
+  it("reads the override off a row", () => {
+    const r = rowToRun({
+      id: "x",
+      date: "2026-04-30",
+      customer: "Consolid8",
+      from_postcode: "NG22 8TX",
+      status_override: "exception",
+      status_override_by: "user-uuid",
+      status_override_at: "2026-04-30T09:00:00Z",
+    });
+    expect(r.statusOverride).toBe("exception");
+    expect(r.statusOverrideBy).toBe("user-uuid");
+    expect(r.statusOverrideAt).toBe("2026-04-30T09:00:00Z");
+  });
+
+  it("defaults to no override when the columns are absent", () => {
+    const r = rowToRun({
+      id: "x",
+      date: "2026-04-30",
+      customer: "Consolid8",
+      from_postcode: "NG22 8TX",
+    });
+    expect(r.statusOverride).toBeNull();
+  });
+
+  it("writes the override back out", () => {
+    const row = runToRow(run({ statusOverride: "delayed" }));
+    expect(row.status_override).toBe("delayed");
+  });
+
+  it("writes null when there is no override", () => {
+    expect(runToRow(run({})).status_override).toBeNull();
+  });
+});
+
+describe("deriveStatus — manual override", () => {
+  const today = "2026-04-30";
+
+  it("wins over the derived status", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL",
+      statusOverride: "exception",
+    });
+    expect(deriveStatus(r, today)).toBe("exception");
+  });
+
+  it("wins even over a fully delivered run", () => {
+    const r = run({
+      date: today,
+      rawText: "GU11 2HL",
+      completedStopIndexes: [0],
+      statusOverride: "in-transit",
+    });
+    expect(deriveStatus(r, today)).toBe("in-transit");
+  });
+
+  it("wins over window lateness", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL 08:00-12:00",
+      statusOverride: "in-transit",
+    });
+    expect(deriveStatus(r, today, new Date("2026-04-30T12:00:00Z"))).toBe("in-transit");
+  });
+
+  it("falls through to derivation when cleared", () => {
+    const r = run({
+      date: today,
+      vehicle: "C12MLC",
+      rawText: "GU11 2HL",
+      statusOverride: null,
+    });
+    expect(deriveStatus(r, today)).toBe("loading");
   });
 });

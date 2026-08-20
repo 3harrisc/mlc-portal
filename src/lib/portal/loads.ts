@@ -1,5 +1,5 @@
 import type { PlannedRun } from "@/types/runs";
-import type { LoadStatus } from "@/components/portal/StatusPill";
+import type { LoadStatus } from "@/lib/portal/status";
 import {
   extractPostcode,
   normalizePostcode,
@@ -18,22 +18,57 @@ import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
  * explicit incident flag) that don't exist yet. Both are stubbed for now and
  * will be wired in phase 3 alongside the share-link / email-notification work.
  */
-export function deriveStatus(run: PlannedRun, todayISO: string): LoadStatus {
+export function deriveStatus(
+  run: PlannedRun,
+  todayISO: string,
+  now: Date = new Date(),
+): LoadStatus {
+  // An admin has pinned this status. Sticky — nothing automatic clears it.
+  if (run.statusOverride) return run.statusOverride;
+
   const stops = parseStops(run.rawText);
   const completed = completedCount(run);
 
   if (stops.length > 0 && completed >= stops.length) return "delivered";
-  if (completed > 0) return "in-transit";
-  // Left the collection point but no drop done yet — genuinely en route, so
-  // "in-transit" rather than the "loading" default below.
-  if (run.progress?.collectDepartedISO) return "in-transit";
 
+  // "Moving" = at least one drop done, or the lorry has left the collection
+  // point. Either way it's genuinely en route rather than still loading.
+  const moving = completed > 0 || !!run.progress?.collectDepartedISO;
   const isToday = run.date === todayISO;
   const hasVehicle = !!run.vehicle?.trim();
 
+  // Past the booked window on the day it's running. Checked before the
+  // in-transit / loading branches so a load that's moving but late reads as
+  // late — that's the thing the customer needs to know. Gated to today so
+  // historic loads with windows aren't retroactively turned red.
+  if (isToday && (moving || hasVehicle) && pastWindowEnd(run, now)) {
+    return "delayed";
+  }
+
+  if (moving) return "in-transit";
   if (isToday && hasVehicle) return "loading";
   if (run.date < todayISO) return "delayed";
   return "scheduled";
+}
+
+/**
+ * True when UK-local `now` is past the closing time of the window on the
+ * next outstanding stop. False when that stop has no window, or every stop
+ * is done.
+ */
+function pastWindowEnd(run: PlannedRun, now: Date): boolean {
+  const idx = nextOutstandingIndex(run);
+  if (idx == null) return false;
+  const stop = parseStopsWithTimes(run.rawText)[idx];
+  const startMins = timeToMinutes(stop?.time ?? undefined);
+  const endMins = timeToMinutes(stop?.windowEnd ?? undefined);
+  if (startMins == null || endMins == null) return false;
+  // A window that doesn't close after it opens has no meaningful "past the
+  // end" on a single day's clock: an overnight slot (22:00–02:00) is
+  // legitimate, and an inverted one (12:00–08:00) is a typo. Either way,
+  // skip the rule rather than marking the load permanently late.
+  if (endMins <= startMins) return false;
+  return ukMinutesOfDay(now) > endMins;
 }
 
 export function completedCount(run: PlannedRun): number {
@@ -85,6 +120,44 @@ export function bookedDeliverySlot(run: PlannedRun): string | null {
   const timed = parseStopsWithTimes(run.rawText);
   for (let i = timed.length - 1; i >= 0; i--) {
     if (timed[i].time) return timed[i].time;
+  }
+  return null;
+}
+
+/**
+ * Index of the first stop that hasn't been completed, or null when the run
+ * is finished or has no stops.
+ *
+ * Completion has two sources — the legacy `completedStopIndexes` array and
+ * the cron-owned `progress.completedIdx` — and both have to be consulted.
+ * Extracted here so `liveEtaToNextStop` and the window-lateness rule in
+ * `deriveStatus` agree on which stop we're heading to.
+ */
+export function nextOutstandingIndex(run: PlannedRun): number | null {
+  const stops = parseStops(run.rawText);
+  const completed = new Set([
+    ...(run.completedStopIndexes ?? []),
+    ...(run.progress?.completedIdx ?? []),
+  ]);
+  const idx = stops.findIndex((_, i) => !completed.has(i));
+  return idx === -1 ? null : idx;
+}
+
+/**
+ * The booked delivery WINDOW, when the run has one — the counterpart to
+ * `bookedDeliverySlot`, which returns just the opening time.
+ *
+ * Scans backwards for the last stop carrying a range, on the same reasoning
+ * as `bookedDeliverySlot`: the final timed stop is the customer delivery,
+ * earlier ones are intermediate drops.
+ */
+export function bookedDeliveryWindow(
+  run: PlannedRun,
+): { from: string; to: string } | null {
+  const timed = parseStopsWithTimes(run.rawText);
+  for (let i = timed.length - 1; i >= 0; i--) {
+    const { time, windowEnd } = timed[i];
+    if (time && windowEnd) return { from: time, to: windowEnd };
   }
   return null;
 }
@@ -157,12 +230,8 @@ export function liveEtaToNextStop(
   if (!truckPos || !coords) return null;
 
   const stops = parseStops(run.rawText);
-  const completed = new Set([
-    ...(run.completedStopIndexes ?? []),
-    ...(run.progress?.completedIdx ?? []),
-  ]);
-  const targetIdx = stops.findIndex((_, i) => !completed.has(i));
-  if (targetIdx === -1) return null;
+  const targetIdx = nextOutstandingIndex(run);
+  if (targetIdx == null) return null;
 
   const target = coords.get(normalizePostcode(stops[targetIdx]));
   if (!target) return null;

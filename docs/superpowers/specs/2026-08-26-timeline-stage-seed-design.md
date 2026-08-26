@@ -104,9 +104,16 @@ always the truth as the system sees it.
 
 `now` is the moment the admin makes the choice.
 
-Every stage at or past the collection point stamps the collection fields with
-`now`, so arrival and departure share a timestamp. That is deliberate: the seed
-asserts a state, not a history it cannot know.
+A stage at or past the collection point stamps the collection fields with `now`
+*only where the system did not already know them*. Real cron-recorded arrival
+and departure times, and real `completedMeta` entries for stops that stay
+completed, are preserved. The seed asserts a state, not a history it cannot
+know, but it must not erase the history it already had, which the timeline
+renders and the reports page aggregates.
+
+A consequence worth knowing: because a real `collectArrivedMs` is preserved, a
+*wrong* collection time cannot be corrected by re-seeding forward. Seed back to
+"Not started" (which clears it) and forward again.
 
 | Stage | Patch applied to `progress` |
 | --- | --- |
@@ -156,6 +163,40 @@ can describe the same state, and it reports the canonical one:
 This is a property of the domain, not a defect: there is no state in which a
 lorry has finished drop 1 of 3 and is not therefore heading to drop 2.
 
+## Interactions found during implementation
+
+Four things that only became visible once the code existed. All are implemented.
+
+**Stage ids are validated against the load.** `isStageValidFor(stage, run)`
+bounds `dropIdx` against the stops the load actually has. Without it a crafted
+request could seed `delivered:9` on a 3-drop load, and `completedCount()`
+measures by array *length*, so the load would read **delivered** to the
+customer with drops still outstanding. A large index also built an array that
+size. The codec additionally rejects non-canonical and unsafe-integer ids.
+
+**A positional pin is superseded.** Pinning the status is the existing
+workaround for the bug this feature replaces, so real rows already carry one.
+`isEnRoute` short-circuits on `statusOverride` but `currentStage` does not, so
+a pinned "Scheduled" would leave the select and the timeline contradicting each
+other. `setLoadStage` therefore clears a *positional* override (`scheduled` /
+`loading` / `in-transit` / `delivered`) and the client mirrors it. `delayed` and
+`exception` survive: they describe lateness or a problem, not position, and
+`isEnRoute` already falls through to the movement signal for them.
+
+**The standstill anchor is reconciled, not passed through.** `stillLat` and
+`stillLng` still pass through untouched, but `stillStopIdx` and `stillSinceMs`
+are *history*. Left alone, an anchor pointing at a stop the seed un-completed
+would make the cron write completed meta, stamped with pre-seed times, for a
+stop that is no longer completed; and a stale dwell could re-complete a stop on
+the very next tick, undoing the seed in exactly the scenario it exists for. The
+anchor is kept only while it still names a stop this seed completed.
+
+**Loads with no seedable drop hide the control.** A regular run with no
+`raw_text` gets a drop leg with `stopIndex: null`, so `listStages` can only
+offer the collection stages, a menu that cannot express delivery.
+`hasSeedableDrop(plan)` gates the control off for those; the status pill
+override still covers them.
+
 ## Known sharp edge
 
 Seeding *backwards* — choosing "Not started" while the vehicle is genuinely
@@ -179,5 +220,6 @@ pattern:
 - An audit stamp for who seeded the *collection* fields. Drops already record
   `completedMeta[i].by = "admin"`; collection has nowhere to put it. Add a
   column only if disputes turn out to need it.
-- Any change to `status_override` or `StageOverrideControl`.
+- Any change to `StageOverrideControl`, or to the `status_override` column
+  itself. Note the action DOES clear a *positional* pin, see below.
 - The `/runs` planner page, which has its own progress view.

@@ -17,6 +17,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun, runToRow } from "@/types/runs";
 import type { LoadStatus } from "@/lib/portal/status";
+import { parseStageId, seedPatch } from "@/lib/portal/stage-seed";
 
 async function getUser() {
   const supabase = await createClient();
@@ -294,4 +295,47 @@ export async function setLoadStatusOverride(
     .eq("id", id);
   if (error) return { error: error.message };
   return { success: true };
+}
+
+/**
+ * Seed a load's progress to the stage an admin says the vehicle is at.
+ *
+ * Unlike setLoadStatusOverride this writes no override column — it writes the
+ * real progress fields, so /api/cron/update-progress carries on from the
+ * seeded state on its next cycle. See
+ * docs/superpowers/specs/2026-08-26-timeline-stage-seed-design.md
+ */
+export async function setLoadStage(id: string, stage: string) {
+  const { supabase, user } = await getUser();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "admin") return { error: "Admin role required" };
+
+  const parsed = parseStageId(stage);
+  if (!parsed) return { error: "Unknown stage" };
+
+  const { data: row, error: readErr } = await supabase
+    .from("loads")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (readErr || !row) return { error: readErr?.message ?? "Load not found" };
+
+  const seed = seedPatch(parsed, rowToRun(row), new Date().toISOString());
+
+  const { error } = await supabase
+    .from("loads")
+    .update({
+      progress: seed.progress,
+      completed_stop_indexes: seed.completedStopIndexes,
+      completed_meta: seed.completedMeta,
+    })
+    .eq("id", id);
+  if (error) return { error: error.message };
+
+  // Returned so the caller can update local state without a refetch.
+  return { success: true as const, seed };
 }

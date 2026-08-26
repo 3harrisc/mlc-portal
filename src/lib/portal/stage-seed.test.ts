@@ -5,6 +5,7 @@ import {
   listStages,
   seedPatch,
   currentStage,
+  isStageValidFor,
   type Stage,
 } from "./stage-seed";
 import { buildRoutePlan } from "./route-plan";
@@ -28,6 +29,16 @@ describe("stage id codec", () => {
     expect(parseStageId("on-site:")).toBeNull();
     expect(parseStageId("on-site:-1")).toBeNull();
     expect(parseStageId("on-site:x")).toBeNull();
+  });
+
+  it("rejects non-canonical indexes so ids round-trip bijectively", () => {
+    expect(parseStageId("on-site:007")).toBeNull();
+    expect(parseStageId("heading-to:007")).toBeNull();
+  });
+
+  it("rejects indexes beyond the safe integer range", () => {
+    expect(parseStageId("on-site:99999999999999999999")).toBeNull();
+    expect(parseStageId("delivered:9007199254740993")).toBeNull();
   });
 });
 
@@ -106,6 +117,42 @@ function mkRun(p: Partial<PlannedRun> = {}): PlannedRun {
   } as PlannedRun;
 }
 
+describe("isStageValidFor", () => {
+  // mkRun's rawText is a three-drop load: indexes 0, 1 and 2.
+  it("accepts a drop index the load actually has", () => {
+    for (const kind of ["heading-to", "on-site", "delivered"] as const) {
+      expect(isStageValidFor({ kind, dropIdx: 2 }, mkRun())).toBe(true);
+    }
+  });
+
+  it("rejects a drop index past the last drop", () => {
+    expect(isStageValidFor({ kind: "delivered", dropIdx: 3 }, mkRun())).toBe(
+      false,
+    );
+    expect(isStageValidFor({ kind: "on-site", dropIdx: 9 }, mkRun())).toBe(
+      false,
+    );
+  });
+
+  it("rejects a huge index rather than letting seedPatch build the array", () => {
+    expect(
+      isStageValidFor({ kind: "delivered", dropIdx: 3_000_000 }, mkRun()),
+    ).toBe(false);
+  });
+
+  it("rejects a negative drop index", () => {
+    expect(isStageValidFor({ kind: "heading-to", dropIdx: -1 }, mkRun())).toBe(
+      false,
+    );
+  });
+
+  it("always accepts the collection stages", () => {
+    const noDrops = mkRun({ rawText: "" });
+    expect(isStageValidFor({ kind: "not-started" }, noDrops)).toBe(true);
+    expect(isStageValidFor({ kind: "at-collection" }, noDrops)).toBe(true);
+  });
+});
+
 describe("seedPatch", () => {
   it("not-started clears every progress field", () => {
     const run = mkRun({
@@ -171,6 +218,102 @@ describe("seedPatch", () => {
       0: { atISO: NOW, by: "admin" },
       1: { atISO: NOW, by: "admin" },
     });
+  });
+
+  it("preserves real completedMeta for stops that stay completed", () => {
+    const run = mkRun({
+      completedStopIndexes: [0],
+      completedMeta: {
+        0: {
+          arrivedISO: "2026-08-26T09:00:00.000Z",
+          atISO: "2026-08-26T09:40:00.000Z",
+          by: "auto",
+        },
+      },
+      progress: {
+        completedIdx: [0],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+      },
+    });
+    const s = seedPatch({ kind: "on-site", dropIdx: 2 }, run, NOW);
+    expect(s.completedMeta[0]).toEqual({
+      arrivedISO: "2026-08-26T09:00:00.000Z",
+      atISO: "2026-08-26T09:40:00.000Z",
+      by: "auto",
+    });
+    // Drop 1 is newly asserted by the seed, so it is stamped now.
+    expect(s.completedMeta[1]).toEqual({ atISO: NOW, by: "admin" });
+  });
+
+  it("preserves real collection arrive/depart times", () => {
+    const run = mkRun({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectArrivedMs: new Date("2026-08-26T06:00:00.000Z").getTime(),
+        collected: true,
+        collectDepartedISO: "2026-08-26T07:00:00.000Z",
+      },
+    });
+    const s = seedPatch({ kind: "on-site", dropIdx: 2 }, run, NOW);
+    expect(s.progress.collectArrivedMs).toBe(
+      new Date("2026-08-26T06:00:00.000Z").getTime(),
+    );
+    expect(s.progress.collectDepartedISO).toBe("2026-08-26T07:00:00.000Z");
+  });
+
+  it("preserves a real arrival time on the at-collection stage", () => {
+    const run = mkRun({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectArrivedMs: new Date("2026-08-26T06:00:00.000Z").getTime(),
+        collected: true,
+      },
+    });
+    const s = seedPatch({ kind: "at-collection" }, run, NOW);
+    expect(s.progress.collectArrivedMs).toBe(
+      new Date("2026-08-26T06:00:00.000Z").getTime(),
+    );
+    expect(s.progress.collectDepartedISO).toBeNull();
+  });
+
+  it("still clears completedMeta entirely on a backwards seed", () => {
+    const run = mkRun({
+      completedStopIndexes: [0, 1],
+      completedMeta: {
+        0: { atISO: "2026-08-26T09:40:00.000Z", by: "auto" },
+        1: { atISO: "2026-08-26T11:20:00.000Z", by: "auto" },
+      },
+      progress: {
+        completedIdx: [0, 1],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectArrivedMs: 111,
+        collected: true,
+        collectDepartedISO: "2026-08-26T07:00:00.000Z",
+      },
+    });
+    expect(seedPatch({ kind: "not-started" }, run, NOW).completedMeta).toEqual(
+      {},
+    );
+    // Un-completing drop 1 drops its meta too.
+    expect(
+      seedPatch({ kind: "delivered", dropIdx: 0 }, run, NOW).completedMeta,
+    ).toEqual({ 0: { atISO: "2026-08-26T09:40:00.000Z", by: "auto" } });
+  });
+
+  it("throws rather than writing NaN for an invalid timestamp", () => {
+    expect(() => seedPatch({ kind: "at-collection" }, mkRun(), "no")).toThrow(
+      /invalid nowISO/,
+    );
   });
 
   it("passes the cron-owned standstill fields through untouched", () => {
@@ -259,5 +402,55 @@ describe("currentStage", () => {
       },
     });
     expect(currentStage(run, plan)).toBe("heading-to:2");
+  });
+
+  // The cron completes whichever uncompleted stop the vehicle is INSIDE,
+  // picked by distance — not by lowest index — so onSiteIdx routinely points
+  // past the first outstanding drop when a driver reorders their drops.
+  it("honours an onSiteIdx that is not the first outstanding drop", () => {
+    const run = mkRun({
+      completedStopIndexes: [1],
+      progress: {
+        completedIdx: [1],
+        onSiteIdx: 2,
+        onSiteSinceMs: NOW_MS,
+        lastInside: true,
+        collectArrivedMs: 111,
+        collected: true,
+        collectDepartedISO: "2026-08-26T07:00:00.000Z",
+      },
+    });
+    expect(currentStage(run, plan)).toBe("on-site:2");
+  });
+
+  it("ignores an onSiteIdx pointing at an already-completed drop", () => {
+    const run = mkRun({
+      completedStopIndexes: [0, 1],
+      progress: {
+        completedIdx: [0, 1],
+        onSiteIdx: 1,
+        onSiteSinceMs: NOW_MS,
+        lastInside: true,
+        collectArrivedMs: 111,
+        collected: true,
+        collectDepartedISO: "2026-08-26T07:00:00.000Z",
+      },
+    });
+    expect(currentStage(run, plan)).toBe("heading-to:2");
+  });
+
+  it("ignores an onSiteIdx the plan has no drop for", () => {
+    const run = mkRun({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: 7,
+        onSiteSinceMs: NOW_MS,
+        lastInside: true,
+        collectArrivedMs: 111,
+        collected: true,
+        collectDepartedISO: "2026-08-26T07:00:00.000Z",
+      },
+    });
+    expect(currentStage(run, plan)).toBe("heading-to:0");
   });
 });

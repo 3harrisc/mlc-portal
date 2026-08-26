@@ -17,7 +17,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun, runToRow } from "@/types/runs";
 import type { LoadStatus } from "@/lib/portal/status";
-import { parseStageId, seedPatch } from "@/lib/portal/stage-seed";
+import { isStageValidFor, parseStageId, seedPatch } from "@/lib/portal/stage-seed";
 
 async function getUser() {
   const supabase = await createClient();
@@ -324,7 +324,13 @@ export async function setLoadStage(id: string, stage: string) {
     .single();
   if (readErr || !row) return { error: readErr?.message ?? "Load not found" };
 
-  const seed = seedPatch(parsed, rowToRun(row), new Date().toISOString());
+  // The stage id is a <select> value and a plain server action argument, so a
+  // hand-rolled POST can name a drop this load does not have. Checked against
+  // the fetched row, because "legal" is a property of the load, not the id.
+  const run = rowToRun(row);
+  if (!isStageValidFor(parsed, run)) return { error: "Unknown stage" };
+
+  const seed = seedPatch(parsed, run, new Date().toISOString());
 
   const { error } = await supabase
     .from("loads")

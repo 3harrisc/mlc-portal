@@ -11,6 +11,7 @@
  */
 
 import type { RoutePlan } from "@/lib/portal/route-plan";
+import { parseStops } from "@/lib/postcode-utils";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 
 export type Stage =
@@ -42,11 +43,36 @@ export function parseStageId(id: StageId): Stage | null {
   const raw = id.slice(sep + 1);
   if (!/^[0-9]+$/.test(raw)) return null;
   const dropIdx = Number(raw);
+  // Canonical and bounded. `String(dropIdx) !== raw` rejects "007" and any
+  // digits that lose precision on the way through Number, so ids round-trip
+  // bijectively; isSafeInteger keeps 1e20 out of seedPatch's loop, which
+  // would never terminate.
+  if (!Number.isSafeInteger(dropIdx) || String(dropIdx) !== raw) return null;
 
   if (kind === "heading-to" || kind === "on-site" || kind === "delivered") {
     return { kind, dropIdx };
   }
   return null;
+}
+
+/**
+ * Whether a stage is legal for this specific load.
+ *
+ * The stage id arrives as a <select> value and a server action argument, so a
+ * caller can hand us a drop index this load does not have. Unchecked,
+ * seedPatch fabricates completed stops for indexes that do not exist — which
+ * completedCount() measures by array LENGTH, so the load would read as
+ * delivered to the customer — and a large index builds an array that size.
+ *
+ * Drop indexes live in the parseStops(run.rawText) index space, the same one
+ * the cron and the route plan use.
+ */
+export function isStageValidFor(stage: Stage, run: PlannedRun): boolean {
+  if (stage.kind === "not-started" || stage.kind === "at-collection") {
+    return true;
+  }
+  const dropCount = parseStops(run.rawText).length;
+  return stage.dropIdx >= 0 && stage.dropIdx < dropCount;
 }
 
 export type StageOption = { id: StageId; label: string };
@@ -100,9 +126,15 @@ export type StageSeed = {
  * load currently is, which keeps the control's effect independent of what it
  * was clicked from.
  *
- * Every stage at or past the collection point stamps the collection fields
- * with nowISO, so arrival and departure share a timestamp. Deliberate — the
- * seed asserts a state, not a history it cannot know.
+ * Timestamps are preserved where real, stamped where newly asserted. A stop
+ * or a collection time the cron already observed keeps its own timestamp and
+ * its own `by` — the event timeline and the customer share link render those,
+ * and a seed cannot know a history better than the tracker did. Only the
+ * stops and fields this seed newly asserts get nowISO / by:"admin".
+ *
+ * That does not make the seed additive: it still decides exactly WHICH stops
+ * are completed, so a backwards seed drops the meta for every stop it
+ * un-completes.
  */
 export function seedPatch(
   stage: Stage,
@@ -110,9 +142,16 @@ export function seedPatch(
   nowISO: string,
 ): StageSeed {
   const nowMs = new Date(nowISO).getTime();
+  if (Number.isNaN(nowMs)) throw new Error(`seedPatch: invalid nowISO ${nowISO}`);
   const prev = run.progress;
 
   // Standstill fields are cron-owned; carry them through untouched.
+  // pendingDeparture is deliberately absent: leaving the key off clears the
+  // cron's chained-run gate for the non-drop stages, so a seeded load starts
+  // tracking from scratch instead of holding off because the lorry is parked
+  // at a stop. The drop path below sets it false explicitly for the same
+  // reason — the asymmetry is only that `undefined` means "undetermined" and
+  // the cron re-derives it, which is what we want before departure.
   const base: ProgressState = {
     completedIdx: [],
     onSiteIdx: null,
@@ -135,7 +174,11 @@ export function seedPatch(
 
   if (stage.kind === "at-collection") {
     return {
-      progress: { ...base, collectArrivedMs: nowMs, collected: true },
+      progress: {
+        ...base,
+        collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
+        collected: true,
+      },
       ...empty,
     };
   }
@@ -145,9 +188,9 @@ export function seedPatch(
   // next cycle holding off tracking because the lorry started at a stop.
   const departed: ProgressState = {
     ...base,
-    collectArrivedMs: nowMs,
+    collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
     collected: true,
-    collectDepartedISO: nowISO,
+    collectDepartedISO: prev?.collectDepartedISO ?? nowISO,
     pendingDeparture: false,
   };
 
@@ -156,8 +199,13 @@ export function seedPatch(
   const completed: number[] = [];
   for (let i = 0; i <= lastComplete; i++) completed.push(i);
 
+  // Keep the real arrival/departure the cron recorded for stops that stay
+  // completed; only stamp the ones this seed is newly asserting.
+  const prevMeta = run.completedMeta ?? {};
   const completedMeta: CompletedMeta = {};
-  for (const i of completed) completedMeta[i] = { atISO: nowISO, by: "admin" };
+  for (const i of completed) {
+    completedMeta[i] = prevMeta[i] ?? { atISO: nowISO, by: "admin" };
+  }
 
   return {
     progress: {
@@ -179,9 +227,9 @@ export function seedPatch(
  * drop 2", so that is what comes back.
  */
 export function currentStage(run: PlannedRun, plan: RoutePlan): StageId {
-  const dropIdxs = plan.legs
-    .filter((l) => l.kind === "drop" && l.stopIndex != null)
-    .map((l) => l.stopIndex as number);
+  const dropIdxs = plan.legs.flatMap((l) =>
+    l.kind === "drop" && l.stopIndex != null ? [l.stopIndex] : [],
+  );
 
   const done = new Set([
     ...(run.completedStopIndexes ?? []),
@@ -196,14 +244,21 @@ export function currentStage(run: PlannedRun, plan: RoutePlan): StageId {
     });
   }
 
+  // onSiteIdx wins wherever it points, not just at the first outstanding
+  // drop: the cron completes whichever uncompleted stop the vehicle is
+  // INSIDE, chosen by distance, and drivers reorder their drops. Ignored once
+  // that drop is done, because the cron clears onSiteIdx on departure and a
+  // stale value must not outrank the real progress.
+  const onSite = run.progress?.onSiteIdx;
+  if (onSite != null && dropIdxs.includes(onSite) && !done.has(onSite)) {
+    return stageId({ kind: "on-site", dropIdx: onSite });
+  }
+
   const next = outstanding[0];
   const moving = !!run.progress?.collectDepartedISO || done.size > 0;
 
-  if (next != null) {
-    if (run.progress?.onSiteIdx === next) {
-      return stageId({ kind: "on-site", dropIdx: next });
-    }
-    if (moving) return stageId({ kind: "heading-to", dropIdx: next });
+  if (next != null && moving) {
+    return stageId({ kind: "heading-to", dropIdx: next });
   }
 
   if (run.progress?.collectArrivedMs != null) return "at-collection";

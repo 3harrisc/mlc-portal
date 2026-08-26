@@ -10,6 +10,8 @@
  * See docs/superpowers/specs/2026-08-26-timeline-stage-seed-design.md
  */
 
+import type { RoutePlan } from "@/lib/portal/route-plan";
+
 export type Stage =
   | { kind: "not-started" }
   | { kind: "at-collection" }
@@ -44,4 +46,41 @@ export function parseStageId(id: StageId): Stage | null {
     return { kind, dropIdx };
   }
   return null;
+}
+
+export type StageOption = { id: StageId; label: string };
+
+/**
+ * The stages this specific load can be at, in timeline order. Generated from
+ * the plan's legs so a load never offers a stage it does not have.
+ */
+export function listStages(plan: RoutePlan): StageOption[] {
+  const out: StageOption[] = [{ id: "not-started", label: "Not started" }];
+
+  const origin = plan.legs.find((l) => l.kind === "origin");
+  if (origin) {
+    out.push({
+      id: "at-collection",
+      label: "At collection · " + origin.postcode,
+    });
+  }
+
+  for (const leg of plan.legs) {
+    if (leg.kind !== "drop" || leg.stopIndex == null) continue;
+    const dropIdx = leg.stopIndex;
+    out.push({
+      id: stageId({ kind: "heading-to", dropIdx }),
+      label: "Heading to " + leg.postcode,
+    });
+    out.push({
+      id: stageId({ kind: "on-site", dropIdx }),
+      label: "On site at " + leg.postcode,
+    });
+    out.push({
+      id: stageId({ kind: "delivered", dropIdx }),
+      label: "Delivered · " + leg.postcode,
+    });
+  }
+
+  return out;
 }

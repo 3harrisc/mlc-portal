@@ -3,6 +3,7 @@ import {
   stageId,
   parseStageId,
   listStages,
+  hasSeedableDrop,
   seedPatch,
   currentStage,
   isStageValidFor,
@@ -89,6 +90,33 @@ describe("listStages", () => {
       "heading-to:2",
       "on-site:2",
       "delivered:2",
+    ]);
+  });
+});
+
+describe("hasSeedableDrop", () => {
+  it("is true for a plan whose drops map to parsed stops", () => {
+    expect(hasSeedableDrop(buildRoutePlan(backload, null))).toBe(true);
+  });
+
+  it("is false for a regular load with no parsed stops", () => {
+    // No rawText, so the synthesised plan's drop leg carries stopIndex null
+    // and listStages can't offer a delivery stage at all.
+    const plan = buildRoutePlan(
+      {
+        rawText: "",
+        fromPostcode: "DN15 8QP",
+        toPostcode: "CF83 1BQ",
+        runType: "regular",
+        returnToBase: false,
+      },
+      null,
+    );
+    expect(plan.legs.some((l) => l.kind === "drop")).toBe(true);
+    expect(hasSeedableDrop(plan)).toBe(false);
+    expect(listStages(plan).map((o) => o.id)).toEqual([
+      "not-started",
+      "at-collection",
     ]);
   });
 });

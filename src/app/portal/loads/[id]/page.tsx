@@ -17,6 +17,7 @@ import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
 import {
   deleteLoad,
+  setLoadStage,
   setLoadStatusOverride,
   setLoadVehicle,
   updateLoad,
@@ -29,6 +30,13 @@ import { buildRoutePlan, type RoutePlan, type PlanLeg } from "@/lib/portal/route
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import StageOverrideControl from "@/components/portal/StageOverrideControl";
+import StageSeedControl from "@/components/portal/StageSeedControl";
+import {
+  currentStage,
+  hasSeedableDrop,
+  listStages,
+  type StageId,
+} from "@/lib/portal/stage-seed";
 import { STATUS_LABEL, type LoadStatus } from "@/lib/portal/status";
 import PortalMap, {
   type MapPin,
@@ -366,6 +374,36 @@ function LoadDetailView({
     () => buildRoutePlan(run, customerBase),
     [run, customerBase],
   );
+
+  // Manual stage seeding. Unlike the status override above this writes no
+  // override column — it seeds the real progress fields and the geofence
+  // cron carries on from there, so the select's value is simply the stage
+  // the load currently reads as.
+  const stageOptions = useMemo(() => listStages(plan), [plan]);
+  const stageValue = useMemo(() => currentStage(run, plan), [run, plan]);
+  const [savingSeed, setSavingSeed] = useState(false);
+
+  async function handleStageSeed(next: StageId) {
+    setSavingSeed(true);
+    const res = await setLoadStage(run.id, next);
+    setSavingSeed(false);
+    // Narrow on `success`, not `error`: the error branch types `error` as
+    // plain string, which a truthiness check can't fully eliminate (the empty
+    // string is falsy), so `res.seed` would stay possibly-undefined below.
+    if (!res.success) {
+      showToast(`Couldn't set stage: ${res.error}`, "err");
+      return;
+    }
+    onRunChange({
+      ...run,
+      progress: res.seed.progress,
+      completedStopIndexes: res.seed.completedStopIndexes,
+      completedMeta: res.seed.completedMeta,
+    });
+    const label = stageOptions.find((o) => o.id === next)?.label ?? next;
+    showToast(`Stage set to ${label}`);
+  }
+
   const completedIdx = useMemo(() => {
     const fromCompleted = new Set(run.completedStopIndexes ?? []);
     (run.progress?.completedIdx ?? []).forEach((i) => fromCompleted.add(i));
@@ -478,6 +516,14 @@ function LoadDetailView({
                 saving={savingStage}
                 onChange={handleStageChange}
               />
+              {isAdmin && hasSeedableDrop(plan) && (
+                <StageSeedControl
+                  options={stageOptions}
+                  value={stageValue}
+                  saving={savingSeed}
+                  onChange={handleStageSeed}
+                />
+              )}
             </div>
             {run.runType === "backload" && (
               <span className="pill scheduled">

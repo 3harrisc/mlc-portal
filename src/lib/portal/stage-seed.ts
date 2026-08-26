@@ -10,7 +10,7 @@
  * See docs/superpowers/specs/2026-08-26-timeline-stage-seed-design.md
  */
 
-import type { RoutePlan } from "@/lib/portal/route-plan";
+import type { PlanLeg, RoutePlan } from "@/lib/portal/route-plan";
 import { parseStops } from "@/lib/postcode-utils";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 
@@ -78,6 +78,26 @@ export function isStageValidFor(stage: Stage, run: PlannedRun): boolean {
 export type StageOption = { id: StageId; label: string };
 
 /**
+ * A leg we can build drop stages from: a drop that maps to a real parsed
+ * stop, so its index means something in the space seedPatch writes into.
+ */
+function isSeedableDrop(leg: PlanLeg): leg is PlanLeg & { stopIndex: number } {
+  return leg.kind === "drop" && leg.stopIndex != null;
+}
+
+/**
+ * Whether a stage can be seeded for at least one of this plan's drops.
+ *
+ * A regular load with no rawText gets a synthesised plan whose drop leg has
+ * stopIndex null, so listStages can only offer "Not started" and "At
+ * collection" — a menu that cannot express delivery at all. Callers use this
+ * to hide the control on such loads rather than offer a truncated one.
+ */
+export function hasSeedableDrop(plan: RoutePlan): boolean {
+  return plan.legs.some(isSeedableDrop);
+}
+
+/**
  * The stages this specific load can be at, in timeline order. Generated from
  * the plan's legs so a load never offers a stage it does not have.
  */
@@ -93,7 +113,7 @@ export function listStages(plan: RoutePlan): StageOption[] {
   }
 
   for (const leg of plan.legs) {
-    if (leg.kind !== "drop" || leg.stopIndex == null) continue;
+    if (!isSeedableDrop(leg)) continue;
     const dropIdx = leg.stopIndex;
     out.push({
       id: stageId({ kind: "heading-to", dropIdx }),

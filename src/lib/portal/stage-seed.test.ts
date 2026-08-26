@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { stageId, parseStageId, listStages } from "./stage-seed";
+import { stageId, parseStageId, listStages, seedPatch } from "./stage-seed";
 import { buildRoutePlan } from "./route-plan";
+import type { PlannedRun } from "@/types/runs";
 
 describe("stage id codec", () => {
   it("round-trips the collection stages", () => {
@@ -71,5 +72,118 @@ describe("listStages", () => {
       "on-site:2",
       "delivered:2",
     ]);
+  });
+});
+
+const NOW = "2026-08-26T14:30:00.000Z";
+const NOW_MS = new Date(NOW).getTime();
+
+function mkRun(p: Partial<PlannedRun> = {}): PlannedRun {
+  return {
+    id: "load-1",
+    jobNumber: "MLC-1",
+    loadRef: "",
+    date: "2026-08-27",
+    customer: "Consolid8",
+    vehicle: "B15MLC",
+    fromPostcode: "DN15 8QP",
+    toPostcode: "",
+    returnToBase: false,
+    startTime: "15:00",
+    serviceMins: 30,
+    includeBreaks: false,
+    rawText: "CF83 1BQ\nBS20 7XN\nNG22 8TX",
+    runType: "backload",
+    runOrder: null,
+    ...p,
+  } as PlannedRun;
+}
+
+describe("seedPatch", () => {
+  it("not-started clears every progress field", () => {
+    const run = mkRun({
+      completedStopIndexes: [0, 1],
+      progress: {
+        completedIdx: [0, 1],
+        onSiteIdx: 1,
+        onSiteSinceMs: 123,
+        lastInside: true,
+        collectArrivedMs: 111,
+        collected: true,
+        collectDepartedISO: "2026-08-26T09:00:00.000Z",
+      },
+    });
+    const s = seedPatch({ kind: "not-started" }, run, NOW);
+    expect(s.completedStopIndexes).toEqual([]);
+    expect(s.completedMeta).toEqual({});
+    expect(s.progress.completedIdx).toEqual([]);
+    expect(s.progress.onSiteIdx).toBeNull();
+    expect(s.progress.collectArrivedMs).toBeNull();
+    expect(s.progress.collected).toBe(false);
+    expect(s.progress.collectDepartedISO).toBeNull();
+  });
+
+  it("at-collection marks arrived and collected but not departed", () => {
+    const s = seedPatch({ kind: "at-collection" }, mkRun(), NOW);
+    expect(s.progress.collectArrivedMs).toBe(NOW_MS);
+    expect(s.progress.collected).toBe(true);
+    expect(s.progress.collectDepartedISO).toBeNull();
+    expect(s.completedStopIndexes).toEqual([]);
+  });
+
+  it("heading-to marks the collection departed and earlier drops done", () => {
+    const s = seedPatch({ kind: "heading-to", dropIdx: 2 }, mkRun(), NOW);
+    expect(s.progress.collectDepartedISO).toBe(NOW);
+    expect(s.completedStopIndexes).toEqual([0, 1]);
+    expect(s.progress.completedIdx).toEqual([0, 1]);
+    expect(s.progress.onSiteIdx).toBeNull();
+  });
+
+  it("heading-to the first drop completes nothing", () => {
+    const s = seedPatch({ kind: "heading-to", dropIdx: 0 }, mkRun(), NOW);
+    expect(s.completedStopIndexes).toEqual([]);
+    expect(s.progress.collectDepartedISO).toBe(NOW);
+  });
+
+  it("on-site marks the drop as the one being sat at", () => {
+    const s = seedPatch({ kind: "on-site", dropIdx: 1 }, mkRun(), NOW);
+    expect(s.progress.onSiteIdx).toBe(1);
+    expect(s.progress.onSiteSinceMs).toBe(NOW_MS);
+    expect(s.completedStopIndexes).toEqual([0]);
+  });
+
+  it("delivered includes the drop itself", () => {
+    const s = seedPatch({ kind: "delivered", dropIdx: 1 }, mkRun(), NOW);
+    expect(s.completedStopIndexes).toEqual([0, 1]);
+    expect(s.progress.onSiteIdx).toBeNull();
+  });
+
+  it("stamps completed drops as admin-marked", () => {
+    const s = seedPatch({ kind: "delivered", dropIdx: 1 }, mkRun(), NOW);
+    expect(s.completedMeta).toEqual({
+      0: { atISO: NOW, by: "admin" },
+      1: { atISO: NOW, by: "admin" },
+    });
+  });
+
+  it("passes the cron-owned standstill fields through untouched", () => {
+    const run = mkRun({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: true,
+        stillLat: 51.1,
+        stillLng: -3.2,
+        stillSinceMs: 999,
+        stillStopIdx: 4,
+      },
+    });
+    const s = seedPatch({ kind: "at-collection" }, run, NOW);
+    expect(s.progress.stillLat).toBe(51.1);
+    expect(s.progress.stillLng).toBe(-3.2);
+    expect(s.progress.stillSinceMs).toBe(999);
+    expect(s.progress.stillStopIdx).toBe(4);
+    expect(s.progress.lastInside).toBe(true);
   });
 });

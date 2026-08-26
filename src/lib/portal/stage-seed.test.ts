@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { stageId, parseStageId, listStages, seedPatch } from "./stage-seed";
+import {
+  stageId,
+  parseStageId,
+  listStages,
+  seedPatch,
+  currentStage,
+  type Stage,
+} from "./stage-seed";
 import { buildRoutePlan } from "./route-plan";
 import type { PlannedRun } from "@/types/runs";
 
@@ -185,5 +192,72 @@ describe("seedPatch", () => {
     expect(s.progress.stillSinceMs).toBe(999);
     expect(s.progress.stillStopIdx).toBe(4);
     expect(s.progress.lastInside).toBe(true);
+  });
+});
+
+describe("currentStage", () => {
+  const plan = buildRoutePlan(
+    {
+      rawText: "CF83 1BQ\nBS20 7XN\nNG22 8TX",
+      fromPostcode: "DN15 8QP",
+      toPostcode: "",
+      runType: "backload" as const,
+      returnToBase: false,
+    },
+    null,
+  );
+
+  /** Apply a seed to a run the way the server action does. */
+  function seeded(stage: Stage): PlannedRun {
+    const s = seedPatch(stage, mkRun(), NOW);
+    return mkRun({
+      progress: s.progress,
+      completedStopIndexes: s.completedStopIndexes,
+      completedMeta: s.completedMeta,
+    });
+  }
+
+  it("reads a fresh load as not started", () => {
+    expect(currentStage(mkRun(), plan)).toBe("not-started");
+  });
+
+  it("round-trips the stages that are distinguishable", () => {
+    const stages: Stage[] = [
+      { kind: "not-started" },
+      { kind: "at-collection" },
+      { kind: "heading-to", dropIdx: 0 },
+      { kind: "heading-to", dropIdx: 2 },
+      { kind: "on-site", dropIdx: 1 },
+      { kind: "delivered", dropIdx: 2 },
+    ];
+    for (const stage of stages) {
+      expect(currentStage(seeded(stage), plan)).toBe(stageId(stage));
+    }
+  });
+
+  it("normalises a non-final delivered to heading-to the next drop", () => {
+    expect(currentStage(seeded({ kind: "delivered", dropIdx: 0 }), plan)).toBe(
+      "heading-to:1",
+    );
+  });
+
+  it("reports the last drop delivered when every drop is done", () => {
+    expect(currentStage(seeded({ kind: "delivered", dropIdx: 2 }), plan)).toBe(
+      "delivered:2",
+    );
+  });
+
+  it("unions both completed sources", () => {
+    const run = mkRun({
+      completedStopIndexes: [0],
+      progress: {
+        completedIdx: [1],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectDepartedISO: NOW,
+      },
+    });
+    expect(currentStage(run, plan)).toBe("heading-to:2");
   });
 });

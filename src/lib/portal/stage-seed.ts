@@ -170,3 +170,42 @@ export function seedPatch(
     completedMeta,
   };
 }
+
+/**
+ * Which stage a load currently reads as — the select's resting value.
+ *
+ * A normalising inverse of seedPatch: states that are genuinely identical
+ * report the same stage. "Delivered drop 1" of three drops IS "heading to
+ * drop 2", so that is what comes back.
+ */
+export function currentStage(run: PlannedRun, plan: RoutePlan): StageId {
+  const dropIdxs = plan.legs
+    .filter((l) => l.kind === "drop" && l.stopIndex != null)
+    .map((l) => l.stopIndex as number);
+
+  const done = new Set([
+    ...(run.completedStopIndexes ?? []),
+    ...(run.progress?.completedIdx ?? []),
+  ]);
+  const outstanding = dropIdxs.filter((i) => !done.has(i));
+
+  if (dropIdxs.length > 0 && outstanding.length === 0) {
+    return stageId({
+      kind: "delivered",
+      dropIdx: dropIdxs[dropIdxs.length - 1],
+    });
+  }
+
+  const next = outstanding[0];
+  const moving = !!run.progress?.collectDepartedISO || done.size > 0;
+
+  if (next != null) {
+    if (run.progress?.onSiteIdx === next) {
+      return stageId({ kind: "on-site", dropIdx: next });
+    }
+    if (moving) return stageId({ kind: "heading-to", dropIdx: next });
+  }
+
+  if (run.progress?.collectArrivedMs != null) return "at-collection";
+  return "not-started";
+}

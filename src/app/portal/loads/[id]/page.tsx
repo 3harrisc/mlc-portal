@@ -385,23 +385,43 @@ function LoadDetailView({
 
   async function handleStageSeed(next: StageId) {
     setSavingSeed(true);
-    const res = await setLoadStage(run.id, next);
-    setSavingSeed(false);
-    // Narrow on `success`, not `error`: the error branch types `error` as
-    // plain string, which a truthiness check can't fully eliminate (the empty
-    // string is falsy), so `res.seed` would stay possibly-undefined below.
-    if (!res.success) {
-      showToast(`Couldn't set stage: ${res.error}`, "err");
-      return;
+    try {
+      const res = await setLoadStage(run.id, next);
+      // Narrow on `success`, not `error`: the error branch types `error` as
+      // plain string, which a truthiness check can't fully eliminate (the empty
+      // string is falsy), so `res.seed` would stay possibly-undefined below.
+      if (!res.success) {
+        showToast(`Couldn't set stage: ${res.error}`, "err");
+        return;
+      }
+      onRunChange({
+        ...run,
+        progress: res.seed.progress,
+        completedStopIndexes: res.seed.completedStopIndexes,
+        completedMeta: res.seed.completedMeta,
+        // The action clears a pinned status that contradicts the seeded
+        // position; mirror that locally or the pill and the timeline keep
+        // arguing with the select until the next reload.
+        ...(res.clearedOverride
+          ? {
+              statusOverride: null,
+              statusOverrideBy: undefined,
+              statusOverrideAt: undefined,
+            }
+          : {}),
+      });
+      const label = stageOptions.find((o) => o.id === next)?.label ?? next;
+      showToast(`Stage set to ${label}`);
+    } catch (e) {
+      // setLoadStage can REJECT rather than return { error }: getUser() throws
+      // on an expired session — the likeliest state for an admin page left open
+      // all day — and a network blip or deploy skew rejects too. Without this
+      // the select would stay disabled for good with no feedback at all.
+      const why = e instanceof Error ? e.message : "request failed";
+      showToast(`Couldn't set stage: ${why}`, "err");
+    } finally {
+      setSavingSeed(false);
     }
-    onRunChange({
-      ...run,
-      progress: res.seed.progress,
-      completedStopIndexes: res.seed.completedStopIndexes,
-      completedMeta: res.seed.completedMeta,
-    });
-    const label = stageOptions.find((o) => o.id === next)?.label ?? next;
-    showToast(`Stage set to ${label}`);
   }
 
   const completedIdx = useMemo(() => {

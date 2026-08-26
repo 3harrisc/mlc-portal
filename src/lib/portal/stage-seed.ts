@@ -35,6 +35,10 @@ export function stageId(stage: Stage): StageId {
 }
 
 export function parseStageId(id: StageId): Stage | null {
+  // Server action arguments are not runtime-typed: a hand-rolled POST can
+  // deliver a number or an object, and id.indexOf would throw a TypeError
+  // (a 500 digest) rather than returning a clean "Unknown stage".
+  if (typeof id !== "string") return null;
   if (id === "not-started" || id === "at-collection") return { kind: id };
 
   const sep = id.indexOf(":");
@@ -134,6 +138,29 @@ export function listStages(plan: RoutePlan): StageOption[] {
 
 export type CompletedMeta = NonNullable<PlannedRun["completedMeta"]>;
 
+/**
+ * The standstill anchor is history, not current position: it records where the
+ * vehicle has been sat and which stop that dwell was attributed to. A seed can
+ * un-complete the stop it points at, after which the cron would write completed
+ * meta for a stop that is no longer completed, stamped with pre-seed times.
+ *
+ * Keep the anchor only while it still refers to a stop this seed completed.
+ * Otherwise drop it and re-anchor the dwell to now, so a dwell that began
+ * before the seed cannot immediately undo it.
+ */
+function reconcileStandstill(
+  p: ProgressState,
+  completed: number[],
+  nowMs: number,
+): ProgressState {
+  if (p.stillStopIdx != null && completed.includes(p.stillStopIdx)) return p;
+  return {
+    ...p,
+    stillStopIdx: null,
+    stillSinceMs: p.stillSinceMs == null ? null : nowMs,
+  };
+}
+
 export type StageSeed = {
   progress: ProgressState;
   completedStopIndexes: number[];
@@ -165,13 +192,14 @@ export function seedPatch(
   if (Number.isNaN(nowMs)) throw new Error(`seedPatch: invalid nowISO ${nowISO}`);
   const prev = run.progress;
 
-  // Standstill fields are cron-owned; carry them through untouched.
-  // pendingDeparture is deliberately absent: leaving the key off clears the
-  // cron's chained-run gate for the non-drop stages, so a seeded load starts
-  // tracking from scratch instead of holding off because the lorry is parked
-  // at a stop. The drop path below sets it false explicitly for the same
-  // reason — the asymmetry is only that `undefined` means "undetermined" and
-  // the cron re-derives it, which is what we want before departure.
+  // The standstill POSITION is cron-owned current fact, so it carries
+  // through untouched; the anchor's history is reconciled per branch below.
+  // pendingDeparture is deliberately absent: leaving the key off leaves the
+  // cron's chained-run gate undetermined for the non-drop stages, so the cron
+  // re-derives it from nearAnyUncompleted on its next cycle — which is what we
+  // want before departure, when the lorry may genuinely still be at a stop.
+  // The drop path below sets it false explicitly instead, because a drop stage
+  // asserts the lorry has already left, so there is nothing left to re-derive.
   const base: ProgressState = {
     completedIdx: [],
     onSiteIdx: null,
@@ -189,16 +217,20 @@ export function seedPatch(
   const empty = { completedStopIndexes: [], completedMeta: {} };
 
   if (stage.kind === "not-started") {
-    return { progress: base, ...empty };
+    return { progress: reconcileStandstill(base, [], nowMs), ...empty };
   }
 
   if (stage.kind === "at-collection") {
     return {
-      progress: {
-        ...base,
-        collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
-        collected: true,
-      },
+      progress: reconcileStandstill(
+        {
+          ...base,
+          collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
+          collected: true,
+        },
+        [],
+        nowMs,
+      ),
       ...empty,
     };
   }
@@ -228,12 +260,16 @@ export function seedPatch(
   }
 
   return {
-    progress: {
-      ...departed,
-      completedIdx: completed,
-      onSiteIdx: stage.kind === "on-site" ? stage.dropIdx : null,
-      onSiteSinceMs: stage.kind === "on-site" ? nowMs : null,
-    },
+    progress: reconcileStandstill(
+      {
+        ...departed,
+        completedIdx: completed,
+        onSiteIdx: stage.kind === "on-site" ? stage.dropIdx : null,
+        onSiteSinceMs: stage.kind === "on-site" ? nowMs : null,
+      },
+      completed,
+      nowMs,
+    ),
     completedStopIndexes: completed,
     completedMeta,
   };
@@ -281,6 +317,10 @@ export function currentStage(run: PlannedRun, plan: RoutePlan): StageId {
     return stageId({ kind: "heading-to", dropIdx: next });
   }
 
-  if (run.progress?.collectArrivedMs != null) return "at-collection";
+  // Only when the plan actually has an origin leg, because that is the sole
+  // condition under which listStages offers "at-collection" — and a value with
+  // no matching <option> leaves the controlled select blank (selectedIndex -1).
+  const hasOrigin = plan.legs.some((l) => l.kind === "origin");
+  if (hasOrigin && run.progress?.collectArrivedMs != null) return "at-collection";
   return "not-started";
 }

@@ -83,13 +83,17 @@ stages it actually has:
 ```
 Not started
 At collection · DN15 8QP
-Loaded & departed · DN15 8QP
 Heading to CF83 1BQ
 On site at CF83 1BQ
 Delivered · CF83 1BQ
 ```
 
 The final three repeat per drop on multi-drop loads.
+
+There is deliberately no separate "Loaded & departed" option: it would seed
+byte-identical state to "Heading to <first drop>", so offering both would give
+a select that snaps to a different label than the one just picked. The timeline
+still renders a "Loaded & departed" *event* — that is unaffected.
 
 There is no "Auto" entry. Because seeding writes real state there is no
 override to revert to, so the select simply *shows* the stage the load
@@ -108,8 +112,7 @@ asserts a state, not a history it cannot know.
 | --- | --- |
 | Not started | `collectArrivedMs=null`, `collected=false`, `collectDepartedISO=null`, `completedIdx=[]`, `onSiteIdx=null`, `onSiteSinceMs=null`, `pendingDeparture=undefined` |
 | At collection | `collectArrivedMs=now`, `collected=true`, `collectDepartedISO=null` |
-| Loaded & departed | as above, plus `collectDepartedISO=now` |
-| Heading to drop N | `collectArrivedMs=now`, `collected=true`, `collectDepartedISO=now`; `completedIdx` = every drop before N, each with `completedMeta[i] = { atISO: now, by: "admin" }`; `onSiteIdx=null` |
+| Heading to drop N (also the state "loaded & departed" describes) | `collectArrivedMs=now`, `collected=true`, `collectDepartedISO=now`; `completedIdx` = every drop before N, each with `completedMeta[i] = { atISO: now, by: "admin" }`; `onSiteIdx=null` |
 | On site at drop N | as "Heading to drop N", plus `onSiteIdx=N`, `onSiteSinceMs=now` |
 | Delivered drop N | as "Heading to drop N", plus N itself in `completedIdx` with `completedMeta[N] = { atISO: now, by: "admin" }` |
 
@@ -140,6 +143,19 @@ Pure core, thin shell — the whole mapping is testable without a DB or browser.
   page's existing `progressChanged()` / `dbProgressRef` merge covers the
   client's next poll.
 
+## Normalisation
+
+`currentStage` is a *normalising* inverse, not a strict one. Two stage labels
+can describe the same state, and it reports the canonical one:
+
+- "Delivered drop N" where N is not the last drop is the same state as
+  "Heading to drop N+1", and reports as the latter.
+- "Delivered" reports as itself only for the final drop, when nothing is
+  outstanding.
+
+This is a property of the domain, not a defect: there is no state in which a
+lorry has finished drop 1 of 3 and is not therefore heading to drop 2.
+
 ## Known sharp edge
 
 Seeding *backwards* — choosing "Not started" while the vehicle is genuinely
@@ -154,7 +170,8 @@ pattern:
 
 - `listStages` for single-drop, multi-drop, and return-to-base plans
 - `seedPatch` for every stage, including the backwards case clearing fields
-- `currentStage(seedPatch(s))` round-trips back to `s` for every stage
+- `currentStage(seedPatch(s))` returns `s` for every distinguishable stage,
+  and normalises the rest (see below)
 - a multi-drop "Heading to drop 3" patch marks drops 1 and 2 complete
 
 ## Out of scope

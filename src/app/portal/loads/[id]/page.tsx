@@ -412,10 +412,11 @@ function LoadDetailView({
   // and the ETA gate below.
   const collection = collectionTimes(run);
   const liveEta = liveEtaToNextStop(run, { truckPos, coords: coordsMap });
-  // Show the live projection only once the lorry is genuinely en route. While
-  // it's still loading at the collection point we hold the booked/chained time
-  // — a "live" ETA from a stationary truck just reads as the booked slot.
-  const usingLiveEta = !collection.loading && !!liveEta;
+  // Show the live projection only once the lorry is genuinely en route. Before
+  // that we hold the booked/chained time — projecting from a vehicle that is
+  // still on a previous job, or sat loading, invents an ETA for this run out
+  // of movement that has nothing to do with it.
+  const usingLiveEta = isEnRoute(run, completedIdx) && !!liveEta;
   const eta =
     (usingLiveEta ? liveEta : null) ??
     (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
@@ -1018,6 +1019,29 @@ function LoadDetailView({
   );
 }
 
+/**
+ * True when the lorry is genuinely between stops — it has departed the
+ * collection point, or already completed a drop. Drives both the "Heading to"
+ * timeline entry and the live ETA projection, so the two can't disagree.
+ *
+ * Needs the movement signal rather than merely "not delivered yet", otherwise
+ * a load whose driver is still finishing a previous job reads as en route.
+ *
+ * Deliberately date-free: a backload collects one day and delivers the next,
+ * so the run's date says nothing about whether it has started today.
+ *
+ * A pinned stage overrides the signal, but only where it's unambiguous about
+ * position. "Delayed" / "Exception" say nothing about where the lorry is, so
+ * they fall through to the real signal.
+ */
+function isEnRoute(run: PlannedRun, completedIdx: Set<number>): boolean {
+  if (run.statusOverride === "in-transit") return true;
+  if (run.statusOverride === "scheduled" || run.statusOverride === "loading") {
+    return false;
+  }
+  return completedIdx.size > 0 || !!run.progress?.collectDepartedISO;
+}
+
 function buildTimeline(
   run: PlannedRun,
   plan: RoutePlan,
@@ -1040,6 +1064,8 @@ function buildTimeline(
   const nextDropLegIdx = plan.legs.findIndex(
     (l) => l.stopIndex != null && !completedIdx.has(l.stopIndex),
   );
+
+  const enRoute = isEnRoute(run, completedIdx);
 
   plan.legs.forEach((leg, i) => {
     const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
@@ -1109,7 +1135,8 @@ function buildTimeline(
         kind: "info",
       });
     } else {
-      const isCurrent = i === nextDropLegIdx && status !== "delivered";
+      const isCurrent =
+        i === nextDropLegIdx && enRoute && status !== "delivered";
       events.push({
         at: fallbackAt,
         title: isCurrent

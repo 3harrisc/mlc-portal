@@ -14,6 +14,7 @@ import {
   deriveStatus,
   displayDestination,
   legSiteTimes,
+  collectionEta,
   liveEtaToNextStop,
   nextOutstandingIndex,
   quickEta,
@@ -840,5 +841,106 @@ describe("deriveStatus — manual override", () => {
       statusOverride: null,
     });
     expect(deriveStatus(r, today)).toBe("loading");
+  });
+});
+
+describe("collectionEta", () => {
+  // The run-in to the pickup. deliveryEta deliberately never covers this
+  // (see its docstring — an unlabelled collection time shown as a delivery
+  // ETA is a bug a customer reported), so it's a separate projection off
+  // fromPostcode, which never appears in raw_text.
+  function nowAt(hhmm: string): Date {
+    return new Date(`2026-01-15T${hhmm}:00Z`);
+  }
+  const coordsFor = (entries: Array<[string, { lat: number; lng: number }]>) =>
+    new Map(entries.map(([pc, c]) => [normalizePostcode(pc), c]));
+
+  const at = { lat: 51.2, lng: -1.0 };
+
+  it("projects to fromPostcode, which liveEtaToNextStop cannot see", () => {
+    const r = run({ fromPostcode: "MK17 8EW", rawText: "S75 5NH 14:00" });
+    const ctx = {
+      truckPos: at,
+      coords: coordsFor([
+        ["MK17 8EW", at],
+        ["S75 5NH", { lat: 53.5, lng: -1.5 }],
+      ]),
+      now: nowAt("10:30"),
+    };
+    // The lorry is sitting on the pickup's coords, so the collection ETA is
+    // now; the drop is ~260km north, so the delivery projection runs past its
+    // 14:00 floor. Two different targets, which is the whole point.
+    expect(collectionEta(r, ctx)).toBe("10:30");
+    expect(liveEtaToNextStop(r, ctx)).toBe("16:05");
+  });
+
+  it("floors at the booked collection slot", () => {
+    const r = run({
+      fromPostcode: "MK17 8EW",
+      collectionTime: "09:00",
+      rawText: "S75 5NH 14:00",
+    });
+    expect(
+      collectionEta(r, {
+        truckPos: at,
+        coords: coordsFor([["MK17 8EW", at]]),
+        now: nowAt("07:15"),
+      }),
+    ).toBe("09:00");
+  });
+
+  it("returns null once the vehicle has arrived — the geofence takes over", () => {
+    const r = run({
+      fromPostcode: "MK17 8EW",
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectArrivedMs: Date.parse("2026-01-15T08:55:00Z"),
+      },
+    });
+    expect(
+      collectionEta(r, {
+        truckPos: at,
+        coords: coordsFor([["MK17 8EW", at]]),
+        now: nowAt("09:10"),
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null once the vehicle has departed the collection point", () => {
+    const r = run({
+      fromPostcode: "MK17 8EW",
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectDepartedISO: "2026-01-15T09:30:00Z",
+      },
+    });
+    expect(
+      collectionEta(r, {
+        truckPos: at,
+        coords: coordsFor([["MK17 8EW", at]]),
+        now: nowAt("10:00"),
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null with no live fix, and with no coords for the pickup", () => {
+    const r = run({ fromPostcode: "MK17 8EW" });
+    expect(
+      collectionEta(r, { coords: coordsFor([["MK17 8EW", at]]) }),
+    ).toBeNull();
+    expect(collectionEta(r, { truckPos: at, coords: new Map() })).toBeNull();
+  });
+
+  it("returns null when the run has no collection postcode", () => {
+    const r = run({ fromPostcode: "" });
+    expect(
+      collectionEta(r, { truckPos: at, coords: coordsFor([["MK17 8EW", at]]) }),
+    ).toBeNull();
   });
 });

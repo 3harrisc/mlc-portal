@@ -236,6 +236,26 @@ export function liveEtaToNextStop(
   const target = coords.get(normalizePostcode(stops[targetIdx]));
   if (!target) return null;
 
+  // Don't promise earlier than the booked slot for the stop we're heading to.
+  // Prefer that stop's own parsed time, falling back to the run-level slot.
+  const timed = parseStopsWithTimes(run.rawText);
+  const bookedForTarget = timed[targetIdx]?.time ?? bookedDeliverySlot(run) ?? "";
+  return projectArrival(truckPos, target, now, bookedForTarget);
+}
+
+/**
+ * Clock time at which a lorry at `truckPos` reaches `target`, floored at
+ * `floorHHMM` when that parses.
+ *
+ * Shared by the delivery and collection projections so both use the same HGV
+ * road-distance estimate as the chaining maths, and so a retune lands on both.
+ */
+function projectArrival(
+  truckPos: { lat: number; lng: number },
+  target: { lat: number; lng: number },
+  now: Date,
+  floorHHMM: string,
+): string {
   const straightKm = haversineKm(
     { lat: truckPos.lat, lng: truckPos.lng },
     { lat: target.lat, lng: target.lng },
@@ -244,13 +264,55 @@ export function liveEtaToNextStop(
     ((straightKm * ROAD_FACTOR) / HGV_AVG_SPEED_KPH) * 60,
   );
   let etaMins = ukMinutesOfDay(now) + travelMins;
-  // Don't promise earlier than the booked slot for the stop we're heading to.
-  // Prefer that stop's own parsed time, falling back to the run-level slot.
-  const timed = parseStopsWithTimes(run.rawText);
-  const bookedForTarget = timed[targetIdx]?.time ?? bookedDeliverySlot(run) ?? "";
-  const bookedMins = timeToMinutes(bookedForTarget);
-  if (bookedMins != null) etaMins = Math.max(etaMins, bookedMins);
+  const floorMins = timeToMinutes(floorHHMM);
+  if (floorMins != null) etaMins = Math.max(etaMins, floorMins);
   return minutesToTime(etaMins);
+}
+
+/**
+ * ETA projected from the live vehicle position to the COLLECTION point, or
+ * null when we can't (or shouldn't) project one.
+ *
+ * Why this is separate from `deliveryEta`
+ * ---------------------------------------
+ * `deliveryEta` answers the consignee's question — "when will the lorry be at
+ * me?" — and deliberately never surfaces a collection time, because doing so
+ * is what produced the bug a customer reported: an 08:30 "ETA" that was
+ * really the 08:30 collection slot. Teaching it to cover the run-in to
+ * collection would reintroduce exactly that, so this is a second number with
+ * its own label rather than a widening of the first.
+ *
+ * The shipper on a subcontracted job wants the opposite figure: when does the
+ * lorry reach the pickup? Nothing computed that before. `liveEtaToNextStop`
+ * can't — it targets `stops[nextOutstandingIndex()]`, and `nextOutstandingIndex`
+ * reads only `raw_text`, where the collection point doesn't appear; it lives
+ * in `fromPostcode`. `collectionTimes` only reports geofence arrive/depart
+ * after the fact. So this projects to `fromPostcode` directly.
+ *
+ * Returns null once the vehicle has reached the collection point — arrived or
+ * departed — because from then on `collectionTimes` has the real times and an
+ * ETA to somewhere the lorry is standing is noise. Also null with no live fix,
+ * no pickup postcode, or no cached coords for it.
+ */
+export function collectionEta(
+  run: PlannedRun,
+  ctx: DeliveryEtaContext = {},
+): string | null {
+  const progress = run.progress;
+  if (progress?.collectArrivedMs != null || progress?.collectDepartedISO) {
+    return null;
+  }
+
+  const from = (run.fromPostcode ?? "").trim();
+  if (!from) return null;
+
+  const { truckPos, coords, now = new Date() } = ctx;
+  if (!truckPos || !coords) return null;
+
+  const target = coords.get(normalizePostcode(from));
+  if (!target) return null;
+
+  return projectArrival(truckPos, target, now, run.collectionTime ?? "");
 }
 
 /**

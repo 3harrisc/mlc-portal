@@ -17,6 +17,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { PlannedRun, ProgressState } from "@/types/runs";
 import { rowToRun, runToRow } from "@/types/runs";
 import type { LoadStatus } from "@/lib/portal/status";
+import { isStageValidFor, parseStageId, seedPatch } from "@/lib/portal/stage-seed";
 
 async function getUser() {
   const supabase = await createClient();
@@ -294,4 +295,86 @@ export async function setLoadStatusOverride(
     .eq("id", id);
   if (error) return { error: error.message };
   return { success: true };
+}
+
+/**
+ * The pinned statuses that assert WHERE the vehicle is. Seeding a stage is a
+ * positional assertion too, so it supersedes these — see setLoadStage.
+ *
+ * "delayed" and "exception" are absent on purpose: they describe lateness or a
+ * problem, not position, and isEnRoute already falls through to the movement
+ * signal for them, so they contradict nothing.
+ */
+const POSITIONAL_STATUSES: LoadStatus[] = [
+  "scheduled",
+  "loading",
+  "in-transit",
+  "delivered",
+];
+
+/**
+ * Seed a load's progress to the stage an admin says the vehicle is at.
+ *
+ * Unlike setLoadStatusOverride this writes no override column — it writes the
+ * real progress fields, so /api/cron/update-progress carries on from the
+ * seeded state on its next cycle. See
+ * docs/superpowers/specs/2026-08-26-timeline-stage-seed-design.md
+ */
+export async function setLoadStage(id: string, stage: string) {
+  const { supabase, user } = await getUser();
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "admin") return { error: "Admin role required" };
+
+  const parsed = parseStageId(stage);
+  if (!parsed) return { error: "Unknown stage" };
+
+  const { data: row, error: readErr } = await supabase
+    .from("loads")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (readErr || !row) return { error: readErr?.message ?? "Load not found" };
+
+  // The stage id is a <select> value and a plain server action argument, so a
+  // hand-rolled POST can name a drop this load does not have. Checked against
+  // the fetched row, because "legal" is a property of the load, not the id.
+  const run = rowToRun(row);
+  if (!isStageValidFor(parsed, run)) return { error: "Unknown stage" };
+
+  const seed = seedPatch(parsed, run, new Date().toISOString());
+
+  // A positional assertion supersedes a positional pin. The load detail page's
+  // isEnRoute short-circuits on statusOverride BEFORE consulting progress, so a
+  // load pinned "Scheduled" and then seeded to "heading to drop 2" would render
+  // drop 1 done and 1/3 complete while the timeline still said "Scheduled: Drop
+  // 2", the live ETA stayed suppressed and the pill still read "Scheduled".
+  // Pinning the status is the existing workaround for the very bug this control
+  // replaces, so production rows already carry one.
+  const clearedOverride =
+    run.statusOverride != null &&
+    POSITIONAL_STATUSES.includes(run.statusOverride);
+
+  const { error } = await supabase
+    .from("loads")
+    .update({
+      progress: seed.progress,
+      completed_stop_indexes: seed.completedStopIndexes,
+      completed_meta: seed.completedMeta,
+      ...(clearedOverride
+        ? {
+            status_override: null,
+            status_override_by: null,
+            status_override_at: null,
+          }
+        : {}),
+    })
+    .eq("id", id);
+  if (error) return { error: error.message };
+
+  // Returned so the caller can update local state without a refetch.
+  return { success: true as const, seed, clearedOverride };
 }

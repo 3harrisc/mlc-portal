@@ -17,6 +17,7 @@ import { normalizePostcode } from "@/lib/postcode-utils";
 import { withNickname } from "@/lib/postcode-nicknames";
 import {
   deleteLoad,
+  setLoadStage,
   setLoadStatusOverride,
   setLoadVehicle,
   updateLoad,
@@ -29,6 +30,13 @@ import { buildRoutePlan, type RoutePlan, type PlanLeg } from "@/lib/portal/route
 import Icon from "@/components/portal/Icon";
 import StatusPill from "@/components/portal/StatusPill";
 import StageOverrideControl from "@/components/portal/StageOverrideControl";
+import StageSeedControl from "@/components/portal/StageSeedControl";
+import {
+  currentStage,
+  hasSeedableDrop,
+  listStages,
+  type StageId,
+} from "@/lib/portal/stage-seed";
 import { STATUS_LABEL, type LoadStatus } from "@/lib/portal/status";
 import PortalMap, {
   type MapPin,
@@ -366,6 +374,56 @@ function LoadDetailView({
     () => buildRoutePlan(run, customerBase),
     [run, customerBase],
   );
+
+  // Manual stage seeding. Unlike the status override above this writes no
+  // override column — it seeds the real progress fields and the geofence
+  // cron carries on from there, so the select's value is simply the stage
+  // the load currently reads as.
+  const stageOptions = useMemo(() => listStages(plan), [plan]);
+  const stageValue = useMemo(() => currentStage(run, plan), [run, plan]);
+  const [savingSeed, setSavingSeed] = useState(false);
+
+  async function handleStageSeed(next: StageId) {
+    setSavingSeed(true);
+    try {
+      const res = await setLoadStage(run.id, next);
+      // Narrow on `success`, not `error`: the error branch types `error` as
+      // plain string, which a truthiness check can't fully eliminate (the empty
+      // string is falsy), so `res.seed` would stay possibly-undefined below.
+      if (!res.success) {
+        showToast(`Couldn't set stage: ${res.error}`, "err");
+        return;
+      }
+      onRunChange({
+        ...run,
+        progress: res.seed.progress,
+        completedStopIndexes: res.seed.completedStopIndexes,
+        completedMeta: res.seed.completedMeta,
+        // The action clears a pinned status that contradicts the seeded
+        // position; mirror that locally or the pill and the timeline keep
+        // arguing with the select until the next reload.
+        ...(res.clearedOverride
+          ? {
+              statusOverride: null,
+              statusOverrideBy: undefined,
+              statusOverrideAt: undefined,
+            }
+          : {}),
+      });
+      const label = stageOptions.find((o) => o.id === next)?.label ?? next;
+      showToast(`Stage set to ${label}`);
+    } catch (e) {
+      // setLoadStage can REJECT rather than return { error }: getUser() throws
+      // on an expired session — the likeliest state for an admin page left open
+      // all day — and a network blip or deploy skew rejects too. Without this
+      // the select would stay disabled for good with no feedback at all.
+      const why = e instanceof Error ? e.message : "request failed";
+      showToast(`Couldn't set stage: ${why}`, "err");
+    } finally {
+      setSavingSeed(false);
+    }
+  }
+
   const completedIdx = useMemo(() => {
     const fromCompleted = new Set(run.completedStopIndexes ?? []);
     (run.progress?.completedIdx ?? []).forEach((i) => fromCompleted.add(i));
@@ -412,10 +470,11 @@ function LoadDetailView({
   // and the ETA gate below.
   const collection = collectionTimes(run);
   const liveEta = liveEtaToNextStop(run, { truckPos, coords: coordsMap });
-  // Show the live projection only once the lorry is genuinely en route. While
-  // it's still loading at the collection point we hold the booked/chained time
-  // — a "live" ETA from a stationary truck just reads as the booked slot.
-  const usingLiveEta = !collection.loading && !!liveEta;
+  // Show the live projection only once the lorry is genuinely en route. Before
+  // that we hold the booked/chained time — projecting from a vehicle that is
+  // still on a previous job, or sat loading, invents an ETA for this run out
+  // of movement that has nothing to do with it.
+  const usingLiveEta = isEnRoute(run, completedIdx) && !!liveEta;
   const eta =
     (usingLiveEta ? liveEta : null) ??
     (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
@@ -477,6 +536,14 @@ function LoadDetailView({
                 saving={savingStage}
                 onChange={handleStageChange}
               />
+              {isAdmin && hasSeedableDrop(plan) && (
+                <StageSeedControl
+                  options={stageOptions}
+                  value={stageValue}
+                  saving={savingSeed}
+                  onChange={handleStageSeed}
+                />
+              )}
             </div>
             {run.runType === "backload" && (
               <span className="pill scheduled">
@@ -1018,6 +1085,29 @@ function LoadDetailView({
   );
 }
 
+/**
+ * True when the lorry is genuinely between stops — it has departed the
+ * collection point, or already completed a drop. Drives both the "Heading to"
+ * timeline entry and the live ETA projection, so the two can't disagree.
+ *
+ * Needs the movement signal rather than merely "not delivered yet", otherwise
+ * a load whose driver is still finishing a previous job reads as en route.
+ *
+ * Deliberately date-free: a backload collects one day and delivers the next,
+ * so the run's date says nothing about whether it has started today.
+ *
+ * A pinned stage overrides the signal, but only where it's unambiguous about
+ * position. "Delayed" / "Exception" say nothing about where the lorry is, so
+ * they fall through to the real signal.
+ */
+function isEnRoute(run: PlannedRun, completedIdx: Set<number>): boolean {
+  if (run.statusOverride === "in-transit") return true;
+  if (run.statusOverride === "scheduled" || run.statusOverride === "loading") {
+    return false;
+  }
+  return completedIdx.size > 0 || !!run.progress?.collectDepartedISO;
+}
+
 function buildTimeline(
   run: PlannedRun,
   plan: RoutePlan,
@@ -1040,6 +1130,8 @@ function buildTimeline(
   const nextDropLegIdx = plan.legs.findIndex(
     (l) => l.stopIndex != null && !completedIdx.has(l.stopIndex),
   );
+
+  const enRoute = isEnRoute(run, completedIdx);
 
   plan.legs.forEach((leg, i) => {
     const done = leg.stopIndex != null && completedIdx.has(leg.stopIndex);
@@ -1109,7 +1201,8 @@ function buildTimeline(
         kind: "info",
       });
     } else {
-      const isCurrent = i === nextDropLegIdx && status !== "delivered";
+      const isCurrent =
+        i === nextDropLegIdx && enRoute && status !== "delivered";
       events.push({
         at: fallbackAt,
         title: isCurrent

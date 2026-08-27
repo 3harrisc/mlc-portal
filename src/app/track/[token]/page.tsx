@@ -9,6 +9,7 @@ import {
 } from "@/lib/postcode-utils";
 import { normVehicle } from "@/lib/webfleet";
 import {
+  collectionEta,
   collectionTimes,
   deriveStatus,
   deliveryEta,
@@ -94,7 +95,16 @@ export default async function PublicTrackPage({ params }: PageProps) {
     sb
       .from("postcode_coords")
       .select("postcode, lat, lng")
-      .in("postcode", stops.map(normalizePostcode)),
+      // The collection point is joined on because collectionEta projects to
+      // fromPostcode, which never appears in raw_text and so isn't in `stops`.
+      .in(
+        "postcode",
+        Array.from(
+          new Set(
+            [...stops, run.fromPostcode].map(normalizePostcode).filter(Boolean),
+          ),
+        ),
+      ),
   ]);
 
   const coords = new Map<string, { lat: number; lng: number }>();
@@ -108,6 +118,11 @@ export default async function PublicTrackPage({ params }: PageProps) {
   const truckPos = posRow
     ? { lat: posRow.lat, lng: posRow.lng, speedKph: posRow.speed_kph }
     : null;
+
+  // null once the lorry has arrived at or left the collection point, so the
+  // ETA cell falls back to the delivery figure for the rest of the job.
+  const collectionRunIn =
+    status === "delivered" ? null : collectionEta(run, { truckPos, coords });
 
   const { mapPins, mapRoutes } = buildMapData(
     stops,
@@ -224,11 +239,17 @@ export default async function PublicTrackPage({ params }: PageProps) {
               </div>
             </div>
             <div className="stat-cell">
-              <div className="l">ETA</div>
+              {/* Before the lorry reaches the pickup the useful number is the
+                  ETA to COLLECTION; deliveryEta can't give it (it targets a
+                  raw_text stop) and must not be widened to — an unlabelled
+                  collection time shown as a delivery ETA is the bug a
+                  customer reported. So it's a second, labelled figure that
+                  gives way to the delivery ETA once collection happens. */}
+              <div className="l">{collectionRunIn ? "ETA collection" : "ETA"}</div>
               <div className="v mono">
                 {status === "delivered"
                   ? "Delivered"
-                  : deliveryEta(run, { truckPos, coords })}
+                  : (collectionRunIn ?? deliveryEta(run, { truckPos, coords }))}
               </div>
             </div>
             <div className="stat-cell">

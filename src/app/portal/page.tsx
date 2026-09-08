@@ -8,7 +8,7 @@ import Icon from "@/components/portal/Icon";
 import Sparkline from "@/components/portal/Sparkline";
 import StatusPill from "@/components/portal/StatusPill";
 import { usePortalData } from "@/components/portal/PortalDataContext";
-import { quickEta } from "@/lib/portal/loads";
+import { isLoadActiveOn, quickEta } from "@/lib/portal/loads";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -34,8 +34,11 @@ export default function DashboardPage() {
   const firstName = profile?.full_name?.split(" ")[0] ?? "there";
   const account = profile?.allowed_customers?.[0] ?? "your account";
 
+  // Everything on the road today — including a backload that collects today
+  // and delivers tomorrow, which is today's job as far as the yard is
+  // concerned even though its `date` is the delivery date.
   const todays = useMemo(
-    () => enriched.filter((r) => r.run.date === today).slice(0, 8),
+    () => enriched.filter((r) => isLoadActiveOn(r.run, today)).slice(0, 8),
     [enriched, today],
   );
 

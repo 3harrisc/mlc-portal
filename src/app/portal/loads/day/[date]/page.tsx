@@ -42,6 +42,8 @@ import { listLoadsForDate, updateLoadOrders } from "@/app/actions/loads";
 import {
   deriveStatus,
   displayDestination,
+  isCrossDayCollection,
+  loadStartDate,
   progressTuple,
   shortDate,
 } from "@/lib/portal/loads";
@@ -341,6 +343,7 @@ export default function CustomerLoadsDayPage() {
               chains={chains}
               nicknames={nicknames}
               today={today}
+              viewDate={date}
               isAdmin={isAdmin}
               onReorder={handleReorder}
             />
@@ -352,6 +355,7 @@ export default function CustomerLoadsDayPage() {
               chains={chains}
               nicknames={nicknames}
               today={today}
+              viewDate={date}
               isAdmin={false}
               onReorder={handleReorder}
             />
@@ -368,6 +372,7 @@ function VehicleGroupCard({
   chains,
   nicknames,
   today,
+  viewDate,
   isAdmin,
   onReorder,
 }: {
@@ -376,6 +381,8 @@ function VehicleGroupCard({
   chains: ReturnType<typeof computeLoadChains>;
   nicknames: Record<string, string>;
   today: string;
+  /** The day this page is showing — needed to label cross-day backloads. */
+  viewDate: string;
   isAdmin: boolean;
   onReorder: (vehicle: string, fromId: string, toId: string) => void;
 }) {
@@ -413,6 +420,7 @@ function VehicleGroupCard({
             fromName={withNickname(r.fromPostcode, nicknames)}
             toName={withNickname(destination, nicknames)}
             destination={destination}
+            viewDate={viewDate}
             reorderable={reorderable}
           />
         );
@@ -493,6 +501,7 @@ function SortableLoadRow({
   fromName,
   toName,
   destination,
+  viewDate,
   reorderable,
 }: {
   row: PlannedRun;
@@ -504,8 +513,18 @@ function SortableLoadRow({
   toName: string;
   /** Resolved delivery destination — see displayDestination() in lib/portal/loads. */
   destination: string;
+  viewDate: string;
   reorderable: boolean;
 }) {
+  // A backload that collects one day and delivers the next appears on both
+  // days' views. Say which half of the job this day is, so "08:00" under
+  // Start isn't mistaken for a delivery.
+  const crossDay = isCrossDayCollection(row);
+  const crossDayNote = !crossDay
+    ? null
+    : viewDate === row.date
+      ? `collected ${shortDate(loadStartDate(row))}`
+      : `collection · delivers ${shortDate(row.date)}`;
   const {
     attributes,
     listeners,
@@ -574,6 +593,11 @@ function SortableLoadRow({
         {chained && (
           <div className="muted" style={{ fontSize: 10 }}>
             booked {row.startTime}
+          </div>
+        )}
+        {crossDayNote && (
+          <div className="muted" style={{ fontSize: 10 }}>
+            {crossDayNote}
           </div>
         )}
       </td>

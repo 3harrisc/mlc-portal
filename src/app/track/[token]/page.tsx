@@ -14,7 +14,10 @@ import {
   deriveStatus,
   deliveryEta,
   displayDestination,
+  isCrossDayCollection,
   legSiteTimes,
+  loadStartDate,
+  shortDate,
 } from "@/lib/portal/loads";
 import StatusPill from "@/components/portal/StatusPill";
 import BrandMark from "@/components/portal/BrandMark";
@@ -61,13 +64,29 @@ export default async function PublicTrackPage({ params }: PageProps) {
   if (!row) notFound();
 
   const run = rowToRun(row);
-  const status = deriveStatus(run, todayISO());
+  const today = todayISO();
+  const status = deriveStatus(run, today);
   const stops = parseStops(run.rawText);
   // Booked time / window per stop, index-aligned with `stops`.
   const stopTimes = parseStopsWithTimes(run.rawText);
   // Collection-point geofence state. Used by both the inline summary pill
   // and the collection row at the head of the stops list.
   const collection = collectionTimes(run);
+  // The pickup is a leg of its own whenever it isn't also one of the drops
+  // (the cron tracks it on the same rule). The row is rendered from the
+  // moment the link exists — booked slot first, then the in / out times as
+  // the geofence stamps them — rather than appearing only once the lorry
+  // has arrived, so a shipper can see the collection booking up front.
+  const collectionPc = normalizePostcode(run.fromPostcode ?? "");
+  const hasCollectionLeg =
+    !!collectionPc &&
+    !stops.some((pc) => normalizePostcode(pc) === collectionPc);
+  // Collects one day, delivers the next (backloads). Both dates are shown
+  // and the ETA cell is labelled so tomorrow's delivery slot isn't read as
+  // today's ETA.
+  const crossDay = isCrossDayCollection(run);
+  const deliveryIsToday = run.date === today;
+  const collectionBooked = (run.collectionTime ?? "").trim() || null;
   const completedIdx = new Set([
     ...(run.completedStopIndexes ?? []),
     ...(run.progress?.completedIdx ?? []),
@@ -132,11 +151,15 @@ export default async function PublicTrackPage({ params }: PageProps) {
     status === "delivered",
   );
 
-  const dateDisp = new Date(`${run.date}T00:00:00`).toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  const longDate = (iso: string) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  const dateDisp = crossDay
+    ? `Collect ${longDate(loadStartDate(run))} · Deliver ${longDate(run.date)}`
+    : longDate(run.date);
 
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px 18px" }}>
@@ -245,12 +268,49 @@ export default async function PublicTrackPage({ params }: PageProps) {
                   collection time shown as a delivery ETA is the bug a
                   customer reported. So it's a second, labelled figure that
                   gives way to the delivery ETA once collection happens. */}
-              <div className="l">{collectionRunIn ? "ETA collection" : "ETA"}</div>
-              <div className="v mono">
-                {status === "delivered"
-                  ? "Delivered"
-                  : (collectionRunIn ?? deliveryEta(run, { truckPos, coords }))}
-              </div>
+              {(() => {
+                if (status === "delivered") {
+                  return (
+                    <>
+                      <div className="l">ETA</div>
+                      <div className="v mono">Delivered</div>
+                    </>
+                  );
+                }
+                if (collectionRunIn) {
+                  return (
+                    <>
+                      <div className="l">ETA collection</div>
+                      <div className="v mono">{collectionRunIn}</div>
+                    </>
+                  );
+                }
+                // Not yet at the pickup on a collect-today / deliver-later
+                // job: the useful number is the booked collection slot, not
+                // tomorrow's delivery time.
+                const beforeCollection =
+                  hasCollectionLeg &&
+                  collection.arrivedAt == null &&
+                  !collection.departed;
+                if (crossDay && !deliveryIsToday && beforeCollection && collectionBooked) {
+                  return (
+                    <>
+                      <div className="l">Collection booked</div>
+                      <div className="v mono">{collectionBooked}</div>
+                    </>
+                  );
+                }
+                return (
+                  <>
+                    <div className="l">
+                      {deliveryIsToday ? "ETA" : `ETA · ${shortDate(run.date)}`}
+                    </div>
+                    <div className="v mono">
+                      {deliveryEta(run, { truckPos, coords })}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <div className="stat-cell">
               <div className="l">Vehicle</div>
@@ -288,7 +348,7 @@ export default async function PublicTrackPage({ params }: PageProps) {
           what customers use for their on-time-arrival KPIs, so it has to
           render on the public share view as well as the authenticated
           /portal/loads/[id] page. */}
-      {(stops.length > 0 || collection.arrivedAt || collection.loading) && (
+      {(stops.length > 0 || hasCollectionLeg) && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="card-header">
             <h3>Stops</h3>
@@ -307,7 +367,7 @@ export default async function PublicTrackPage({ params }: PageProps) {
                 gap: 8,
               }}
             >
-              {(collection.arrivedAt || collection.departedAt || collection.loading) && (
+              {hasCollectionLeg && (
                 <li
                   style={{
                     display: "flex",
@@ -352,7 +412,12 @@ export default async function PublicTrackPage({ params }: PageProps) {
                     </div>
                     <div className="muted" style={{ fontSize: 10.5 }}>
                       Collection point
+                      {crossDay && ` · ${shortDate(loadStartDate(run))}`}
                     </div>
+                    {/* Booked slot, then the gate times: In when the lorry
+                        enters the pickup radius, Out when it leaves. Both
+                        are shown as "—" until stamped so the shipper can see
+                        the fields exist and will fill in. */}
                     <div
                       style={{
                         display: "flex",
@@ -362,18 +427,20 @@ export default async function PublicTrackPage({ params }: PageProps) {
                         fontSize: 11,
                       }}
                     >
-                      {collection.arrivedAt && (
+                      {collectionBooked && (
                         <span className="mono">
-                          <span className="muted">Arrived</span>{" "}
-                          <span className="bold">{collection.arrivedAt}</span>
+                          <span className="muted">Booked</span>{" "}
+                          <span className="bold">{collectionBooked}</span>
                         </span>
                       )}
-                      {collection.departedAt && (
-                        <span className="mono">
-                          <span className="muted">Departed</span>{" "}
-                          <span className="bold">{collection.departedAt}</span>
-                        </span>
-                      )}
+                      <span className="mono">
+                        <span className="muted">In</span>{" "}
+                        <span className="bold">{collection.arrivedAt ?? "—"}</span>
+                      </span>
+                      <span className="mono">
+                        <span className="muted">Out</span>{" "}
+                        <span className="bold">{collection.departedAt ?? "—"}</span>
+                      </span>
                       {collection.loading && collection.loadingSince && (
                         <span className="mono" style={{ color: "var(--mlc-blue)" }}>
                           <span className="muted">Loading since</span>{" "}

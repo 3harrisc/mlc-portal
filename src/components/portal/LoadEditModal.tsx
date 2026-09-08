@@ -234,7 +234,10 @@ export default function LoadEditModal({
                   style={{ height: 32 }}
                 />
                 <span className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                  Leave blank if collection and delivery are the same day.
+                  Leave blank if collection and delivery are the same day. Set
+                  it when the pickup is the day before: the load then shows as
+                  that day&apos;s job too, and the tracker reads Loading on the
+                  collection day.
                 </span>
               </Field>
             )}

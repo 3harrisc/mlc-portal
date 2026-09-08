@@ -45,10 +45,17 @@ export async function listLoadsForDate(
   const isAdmin = profile?.role === "admin";
   const allowed: string[] = profile?.allowed_customers ?? [];
 
+  // The value is interpolated into a PostgREST `or` filter below, so refuse
+  // anything that isn't a plain YYYY-MM-DD before it gets near the query.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: "Invalid date" };
+
   let query = supabase
     .from("loads")
     .select("*")
-    .eq("date", date)
+    // A load belongs to a day if it DELIVERS that day or COLLECTS that day.
+    // A backload collecting on the 8th for delivery on the 9th is the 8th's
+    // job as much as the 9th's — the same rule the dispatch /runs page uses.
+    .or(`date.eq.${date},collection_date.eq.${date}`)
     .order("vehicle", { ascending: true, nullsFirst: false })
     .order("run_order", { ascending: true, nullsFirst: false })
     .order("start_time", { ascending: true });

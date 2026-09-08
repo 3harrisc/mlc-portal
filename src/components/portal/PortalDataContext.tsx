@@ -9,7 +9,7 @@ import {
 import { useScopedLoads } from "@/hooks/useScopedLoads";
 import { todayISO } from "@/lib/time-utils";
 import type { PlannedRun } from "@/types/runs";
-import { deriveStatus } from "@/lib/portal/loads";
+import { deriveStatus, isLoadActiveOn } from "@/lib/portal/loads";
 import type { LoadStatus } from "./StatusPill";
 
 interface EnrichedRun {
@@ -69,7 +69,11 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     const deliveredToday = enriched.filter(
       (r) => r.status === "delivered" && r.run.date === today,
     ).length;
-    const bookedToday = enriched.filter((r) => r.run.date === today).length;
+    // "Booked today" counts every load on the road today, so a backload
+    // collecting today for delivery tomorrow shows up on its collection day.
+    const bookedToday = enriched.filter((r) =>
+      isLoadActiveOn(r.run, today),
+    ).length;
     return {
       runs,
       enriched,

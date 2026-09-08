@@ -9,6 +9,52 @@ import {
 import { estimateFinishTime } from "@/lib/runDuration";
 import { haversineKm } from "@/lib/geo-utils";
 import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
+import { lastTrackedDay } from "@/lib/portal/tracking-window";
+
+/**
+ * Which calendar days a load is actually on the road.
+ *
+ * Why
+ * ---
+ * `date` is the DELIVERY date. A backload that collects on Monday and
+ * delivers on Tuesday carries `collectionDate = Monday`, `date = Tuesday` —
+ * and every "is this today's job?" check in the portal used to read `date`
+ * alone. So on Monday, while the lorry was sat loading at the pickup, the
+ * load sat under Tuesday in the list, was missing from Today on the
+ * dashboard and the day view, and read as "scheduled" rather than
+ * "loading". The dispatcher's /runs page already treated the collection
+ * day as a working day (`r.date === date || r.collectionDate === date`);
+ * these helpers give the customer portal the same view.
+ *
+ * `lastTrackedDay` extends the far end for declared multi-day trips, so the
+ * span is [collection day, last delivery day] inclusive.
+ */
+
+/**
+ * First day the load is on the road: the collection day for a cross-day
+ * backload, otherwise the delivery date. A `collectionDate` on or after the
+ * delivery date is ignored (it adds nothing, or is a typo).
+ */
+export function loadStartDate(run: PlannedRun): string {
+  const collection = (run.collectionDate ?? "").trim();
+  if (collection && collection < run.date) return collection;
+  return run.date;
+}
+
+/** True when the pickup is on an earlier day than the delivery. */
+export function isCrossDayCollection(run: PlannedRun): boolean {
+  return loadStartDate(run) !== run.date;
+}
+
+/**
+ * True when `iso` (YYYY-MM-DD) falls inside the days the load is on the
+ * road. ISO date strings compare correctly with `<=` / `>=`.
+ */
+export function isLoadActiveOn(run: PlannedRun, iso: string): boolean {
+  return (
+    iso >= loadStartDate(run) && iso <= lastTrackedDay(run.date, run.dayCount)
+  );
+}
 
 /**
  * Derives the customer-portal status enum from a PlannedRun.
@@ -34,20 +80,29 @@ export function deriveStatus(
   // "Moving" = at least one drop done, or the lorry has left the collection
   // point. Either way it's genuinely en route rather than still loading.
   const moving = completed > 0 || !!run.progress?.collectDepartedISO;
-  const isToday = run.date === todayISO;
+  // The delivery date proper — the day the stop windows in raw_text apply to.
+  const isDeliveryDay = run.date === todayISO;
+  // Any day the load is on the road, collection day included. A cross-day
+  // backload is "today's job" on the day it collects, not just the day it
+  // delivers (see `isLoadActiveOn`).
+  const activeToday = isLoadActiveOn(run, todayISO);
   const hasVehicle = !!run.vehicle?.trim();
 
   // Past the booked window on the day it's running. Checked before the
   // in-transit / loading branches so a load that's moving but late reads as
-  // late — that's the thing the customer needs to know. Gated to today so
-  // historic loads with windows aren't retroactively turned red.
-  if (isToday && (moving || hasVehicle) && pastWindowEnd(run, now)) {
+  // late — that's the thing the customer needs to know. Gated to the
+  // delivery day so historic loads with windows aren't retroactively turned
+  // red, and so a backload collecting the day before isn't flagged against
+  // tomorrow's delivery window.
+  if (isDeliveryDay && (moving || hasVehicle) && pastWindowEnd(run, now)) {
     return "delayed";
   }
 
   if (moving) return "in-transit";
-  if (isToday && hasVehicle) return "loading";
-  if (run.date < todayISO) return "delayed";
+  if (activeToday && hasVehicle) return "loading";
+  // Only a load whose whole span is behind us is late; a multi-day trip
+  // still inside its span isn't.
+  if (!activeToday && run.date < todayISO) return "delayed";
   return "scheduled";
 }
 

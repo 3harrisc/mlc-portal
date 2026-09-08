@@ -13,7 +13,10 @@ import {
   deliveryEta,
   deriveStatus,
   displayDestination,
+  isCrossDayCollection,
+  isLoadActiveOn,
   legSiteTimes,
+  loadStartDate,
   collectionEta,
   liveEtaToNextStop,
   nextOutstandingIndex,
@@ -42,6 +45,8 @@ function run(p: Partial<PlannedRun>): PlannedRun {
     runOrder: p.runOrder ?? null,
     bookingTime: p.bookingTime,
     collectionTime: p.collectionTime,
+    collectionDate: p.collectionDate,
+    dayCount: p.dayCount,
     completedMeta: p.completedMeta,
     progress: p.progress,
     completedStopIndexes: p.completedStopIndexes,
@@ -590,6 +595,160 @@ describe("deriveStatus — collection departure", () => {
       },
     });
     expect(deriveStatus(r, today)).toBe("in-transit");
+  });
+});
+
+/**
+ * The regression these tests exist for: MLC-20260908-002 was a backload
+ * collecting IG11 0SD on 8 Sep for delivery in WF11 on 9 Sep. On the 8th,
+ * with the lorry booked in at the pickup, the portal filed it under the 9th
+ * and read it as "scheduled" — every "today" check looked at `date` (the
+ * delivery date) alone.
+ */
+describe("loadStartDate / isCrossDayCollection", () => {
+  it("is the delivery date when there is no collection date", () => {
+    const r = run({ date: "2026-09-09" });
+    expect(loadStartDate(r)).toBe("2026-09-09");
+    expect(isCrossDayCollection(r)).toBe(false);
+  });
+
+  it("is the collection date when the pickup is the day before", () => {
+    const r = run({ date: "2026-09-09", collectionDate: "2026-09-08" });
+    expect(loadStartDate(r)).toBe("2026-09-08");
+    expect(isCrossDayCollection(r)).toBe(true);
+  });
+
+  it("ignores a collection date equal to the delivery date", () => {
+    const r = run({ date: "2026-09-09", collectionDate: "2026-09-09" });
+    expect(loadStartDate(r)).toBe("2026-09-09");
+    expect(isCrossDayCollection(r)).toBe(false);
+  });
+
+  it("ignores a collection date AFTER the delivery date (a typo)", () => {
+    const r = run({ date: "2026-09-09", collectionDate: "2026-09-10" });
+    expect(loadStartDate(r)).toBe("2026-09-09");
+    expect(isCrossDayCollection(r)).toBe(false);
+  });
+
+  it("ignores a blank collection date", () => {
+    expect(loadStartDate(run({ date: "2026-09-09", collectionDate: "  " }))).toBe(
+      "2026-09-09",
+    );
+  });
+});
+
+describe("isLoadActiveOn", () => {
+  const backload = run({ date: "2026-09-09", collectionDate: "2026-09-08" });
+
+  it("is active on the collection day", () => {
+    expect(isLoadActiveOn(backload, "2026-09-08")).toBe(true);
+  });
+
+  it("is active on the delivery day", () => {
+    expect(isLoadActiveOn(backload, "2026-09-09")).toBe(true);
+  });
+
+  it("is not active the day before collection or the day after delivery", () => {
+    expect(isLoadActiveOn(backload, "2026-09-07")).toBe(false);
+    expect(isLoadActiveOn(backload, "2026-09-10")).toBe(false);
+  });
+
+  it("is a single day without a collection date", () => {
+    const r = run({ date: "2026-09-09" });
+    expect(isLoadActiveOn(r, "2026-09-08")).toBe(false);
+    expect(isLoadActiveOn(r, "2026-09-09")).toBe(true);
+    expect(isLoadActiveOn(r, "2026-09-10")).toBe(false);
+  });
+
+  it("extends across a declared multi-day trip", () => {
+    const r = run({ date: "2026-09-08", dayCount: 3 });
+    expect(isLoadActiveOn(r, "2026-09-10")).toBe(true);
+    expect(isLoadActiveOn(r, "2026-09-11")).toBe(false);
+  });
+});
+
+describe("deriveStatus — cross-day backload", () => {
+  const collectionDay = "2026-09-08";
+  const deliveryDay = "2026-09-09";
+  const backload = (over: Partial<PlannedRun> = {}) =>
+    run({
+      runType: "backload",
+      date: deliveryDay,
+      collectionDate: collectionDay,
+      collectionTime: "08:00",
+      fromPostcode: "IG11 0SD",
+      rawText: "WF11 0AB 10:00",
+      ...over,
+    });
+
+  it("is 'loading' on the collection day once a vehicle is assigned", () => {
+    expect(deriveStatus(backload({ vehicle: "C12MLC" }), collectionDay)).toBe(
+      "loading",
+    );
+  });
+
+  it("is 'scheduled' on the collection day with no vehicle yet", () => {
+    expect(deriveStatus(backload(), collectionDay)).toBe("scheduled");
+  });
+
+  it("is 'scheduled' the day before collection", () => {
+    expect(deriveStatus(backload({ vehicle: "C12MLC" }), "2026-09-07")).toBe(
+      "scheduled",
+    );
+  });
+
+  it("is 'in-transit' once the lorry leaves the pickup on the collection day", () => {
+    const r = backload({
+      vehicle: "C12MLC",
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectDepartedISO: "2026-09-08T09:30:00Z",
+      },
+    });
+    expect(deriveStatus(r, collectionDay)).toBe("in-transit");
+  });
+
+  it("still reads 'loading' on the delivery day with a vehicle", () => {
+    expect(deriveStatus(backload({ vehicle: "C12MLC" }), deliveryDay)).toBe(
+      "loading",
+    );
+  });
+
+  it("does not flag tomorrow's delivery window as late on the collection day", () => {
+    // 13:00 UK on the collection day — past the 08:00–12:00 window that
+    // belongs to the NEXT day's delivery.
+    const r = backload({ vehicle: "C12MLC", rawText: "WF11 0AB 08:00-12:00" });
+    expect(
+      deriveStatus(r, collectionDay, new Date("2026-09-08T12:00:00Z")),
+    ).toBe("loading");
+  });
+
+  it("does flag the window on the delivery day itself", () => {
+    const r = backload({ vehicle: "C12MLC", rawText: "WF11 0AB 08:00-12:00" });
+    expect(
+      deriveStatus(r, deliveryDay, new Date("2026-09-09T12:00:00Z")),
+    ).toBe("delayed");
+  });
+
+  it("is 'delayed' once the delivery day has passed unfinished", () => {
+    expect(deriveStatus(backload({ vehicle: "C12MLC" }), "2026-09-10")).toBe(
+      "delayed",
+    );
+  });
+});
+
+describe("deriveStatus — multi-day trip", () => {
+  it("is not 'delayed' on day two of a declared three-day trip", () => {
+    const r = run({ date: "2026-09-08", dayCount: 3, rawText: "WF11 0AB" });
+    expect(deriveStatus(r, "2026-09-09")).toBe("scheduled");
+  });
+
+  it("is 'delayed' once the trip's span has passed unfinished", () => {
+    const r = run({ date: "2026-09-08", dayCount: 3, rawText: "WF11 0AB" });
+    expect(deriveStatus(r, "2026-09-11")).toBe("delayed");
   });
 });
 

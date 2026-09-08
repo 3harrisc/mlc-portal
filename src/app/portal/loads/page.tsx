@@ -21,6 +21,8 @@ import { usePortalSearch } from "@/components/portal/PortalSearchContext";
 import { useToast } from "@/components/portal/ToastContext";
 import {
   displayDestination,
+  isCrossDayCollection,
+  loadStartDate,
   matchesSearch,
   progressTuple,
   shortDate,
@@ -527,12 +529,17 @@ export default function LoadsPage() {
                 // any other sort would scatter dates and the separators
                 // would be noise rather than signal. The current logic
                 // mirrors how the dispatch planner groups by week.
+                //
+                // Days are the day the job STARTS (loadStartDate), so a
+                // backload collecting today for delivery tomorrow files
+                // under today rather than tomorrow.
+                const rowDay = loadStartDate(row.run);
                 const prev = idx > 0 ? visible[idx - 1] : null;
                 const showSeparator =
                   sortKey === "date" &&
-                  (!prev || prev.run.date !== row.run.date);
+                  (!prev || loadStartDate(prev.run) !== rowDay);
                 const sameDateCount = visible.filter(
-                  (r) => r.run.date === row.run.date,
+                  (r) => loadStartDate(r.run) === rowDay,
                 ).length;
                 return (
                   <Fragment key={row.run.id}>
@@ -555,7 +562,7 @@ export default function LoadsPage() {
                               color: "var(--ink-500)",
                             }}
                           >
-                            <span>{longDateLabel(row.run.date)}</span>
+                            <span>{longDateLabel(rowDay)}</span>
                             <span style={{ opacity: 0.65, fontWeight: 400 }}>
                               · {sameDateCount} load
                               {sameDateCount === 1 ? "" : "s"}
@@ -691,7 +698,9 @@ function statusColor(status: LoadStatus): string {
 function sortValue(row: LoadRow, key: SortKey): string | number {
   switch (key) {
     case "date":
-      return row.run.date;
+      // Sort by the day the job starts, so the date separators (which group
+      // on the same key) stay contiguous.
+      return loadStartDate(row.run);
     case "customer":
       return row.run.customer;
     case "vehicle":
@@ -816,7 +825,17 @@ function LoadTableRow({
       </RowLink>
       <RowLink id={run.id}>
         <div className="mono tnum" style={{ fontSize: 11.5 }}>
-          {shortDate(run.date)}
+          {isCrossDayCollection(run) ? (
+            // Collects one day, delivers the next: show both so the row
+            // reads "08 Sep → 09 Sep" rather than hiding the collection day.
+            <span title={`Collects ${shortDate(loadStartDate(run))}, delivers ${shortDate(run.date)}`}>
+              {shortDate(loadStartDate(run))}
+              <span className="muted" style={{ margin: "0 3px" }}>→</span>
+              {shortDate(run.date)}
+            </span>
+          ) : (
+            shortDate(run.date)
+          )}
         </div>
         <div className="muted" style={{ fontSize: 10.5 }}>
           {row.chained ? (

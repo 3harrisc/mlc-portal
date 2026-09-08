@@ -118,8 +118,13 @@ export default function DailyPlannerPage() {
 
   const prev = shiftDate(date, -1);
   const next = shiftDate(date, 1);
-  const totalRevenue = runs.reduce((s, r) => s + (r.revenue ?? 0), 0);
-  const billableCount = runs.filter((r) => r.billable).length;
+  // Rows that DELIVER today. A backload collecting today for tomorrow is
+  // listed (the lorry is out doing it) but bills on its delivery day, so
+  // it's kept out of today's revenue / billable figures and doesn't hide
+  // the "Copy from last week" starter for an otherwise empty day.
+  const ownRuns = runs.filter((r) => r.date === date);
+  const totalRevenue = ownRuns.reduce((s, r) => s + (r.revenue ?? 0), 0);
+  const billableCount = ownRuns.filter((r) => r.billable).length;
   const assignedVehicles = Array.from(
     new Set(runs.map((r) => r.vehicle?.trim()).filter((v): v is string => !!v))
   );
@@ -167,7 +172,7 @@ export default function DailyPlannerPage() {
             className="input"
             style={{ height: 32, fontSize: 12.5, padding: "0 10px" }}
           />
-          {isAdmin && runs.length === 0 && (
+          {isAdmin && ownRuns.length === 0 && (
             <button
               type="button"
               className="btn sm primary"

@@ -14,6 +14,7 @@ import { sortRunsForPlanner } from "@/lib/planner/customer-order";
 import type { PlannedRun } from "@/types/runs";
 import { aggregateWeek } from "@/lib/figures/aggregate";
 import { emptyWeeklyExtras } from "@/types/figures";
+import { isCrossDayCollection, loadStartDate } from "@/lib/portal/loads";
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 type DayKey = typeof DAY_LABELS[number];
@@ -96,12 +97,23 @@ export default function WeeklyPlannerPage() {
     [year, week]
   );
 
+  // Rows delivering inside this week. The fetch also brings in a backload
+  // that only COLLECTS inside the week (delivering next Monday, say); those
+  // appear on their collection day below but stay out of the week's
+  // revenue, which belongs to the week they deliver in.
+  const weekRuns = useMemo(() => {
+    const first = dayDates[0]?.date ?? "";
+    const last = dayDates[6]?.date ?? "";
+    return allRuns.filter((r) => r.date >= first && r.date <= last);
+  }, [allRuns, dayDates]);
+
   const runsByDay = useMemo(() => {
     const map = new Map<string, PlannedRun[]>();
     for (const d of dayDates) map.set(d.date, []);
     for (const r of allRuns) {
-      const list = map.get(r.date);
-      if (list) list.push(r);
+      map.get(r.date)?.push(r);
+      // A cross-day backload is also on the road on its collection day.
+      if (isCrossDayCollection(r)) map.get(loadStartDate(r))?.push(r);
     }
     // Customer-priority sort within each day, so the active-day grid below
     // shows CONSOLID8 → ASHWOOD → MONTPELLIER → others.
@@ -113,11 +125,11 @@ export default function WeeklyPlannerPage() {
 
   const aggregate = useMemo(() => {
     return aggregateWeek({
-      runs: allRuns,
+      runs: weekRuns,
       vehicleCosts: [],
       extras: emptyWeeklyExtras(year, week),
     });
-  }, [allRuns, year, week]);
+  }, [weekRuns, year, week]);
 
   if (authLoading) {
     return <div className="muted">Loading…</div>;
@@ -170,7 +182,7 @@ export default function WeeklyPlannerPage() {
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
-          {isAdmin && allRuns.length === 0 && (
+          {isAdmin && weekRuns.length === 0 && (
             <button
               type="button"
               className="btn sm primary"
@@ -210,7 +222,12 @@ export default function WeeklyPlannerPage() {
       <div className="seg" style={{ marginBottom: 16 }}>
         {dayDates.map(({ label, date }) => {
           const dayRuns = runsByDay.get(date) ?? [];
-          const dayRevenue = dayRuns.reduce((s, r) => s + (r.revenue ?? 0), 0);
+          // Revenue sits on the delivery day; a collection-only appearance
+          // of a backload contributes nothing here.
+          const dayRevenue = dayRuns.reduce(
+            (s, r) => s + (r.date === date ? (r.revenue ?? 0) : 0),
+            0,
+          );
           const isActive = activeDay === label;
           return (
             <button

@@ -30,15 +30,29 @@ function isoWeekSunday(year: number, week: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** All runs for a single date, ordered by vehicle then start time. */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * All runs on the road on a single date, ordered by vehicle then start time.
+ *
+ * A run belongs to a day if it DELIVERS that day (`date`) or COLLECTS that
+ * day (`collection_date`, set on a backload that picks up the day before it
+ * delivers). The lorry is out doing the collection on that earlier day, so
+ * the sheet for that day has to show it — the same rule the /runs page and
+ * the customer day view use. Callers can tell the two apart by comparing
+ * `run.date` with the day they asked for.
+ */
 export async function listRunsForDate(
   date: string
 ): Promise<{ runs?: PlannedRun[]; error?: string }> {
+  // Interpolated into a PostgREST `or` filter, so refuse anything that
+  // isn't a plain YYYY-MM-DD first.
+  if (!ISO_DATE.test(date)) return { error: "Invalid date" };
   const { supabase } = await getUser();
   const { data, error } = await supabase
     .from("runs")
     .select("*")
-    .eq("date", date)
+    .or(`date.eq.${date},collection_date.eq.${date}`)
     .order("vehicle", { ascending: true, nullsFirst: false })
     .order("run_order", { ascending: true, nullsFirst: false })
     .order("start_time", { ascending: true });
@@ -54,11 +68,17 @@ export async function listRunsForIsoWeek(
   const { supabase } = await getUser();
   const startDate = isoWeekMonday(year, week);
   const endDate = isoWeekSunday(year, week);
+  // Delivering inside the week, OR collecting inside it — a backload that
+  // collects on the Sunday for a Monday delivery is Sunday's work too. The
+  // week page places each row under every day it's active on and keeps
+  // revenue on the delivery day, so nothing is counted twice.
   const { data, error } = await supabase
     .from("runs")
     .select("*")
-    .gte("date", startDate)
-    .lte("date", endDate)
+    .or(
+      `and(date.gte.${startDate},date.lte.${endDate}),` +
+        `and(collection_date.gte.${startDate},collection_date.lte.${endDate})`,
+    )
     .order("date", { ascending: true })
     .order("vehicle", { ascending: true });
   if (error) return { error: error.message };

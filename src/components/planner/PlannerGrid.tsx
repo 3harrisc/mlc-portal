@@ -18,6 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { PlannedRun } from "@/types/runs";
+import { isCrossDayCollection, loadStartDate, shortDate } from "@/lib/portal/loads";
 import {
   updatePlannerCell,
   insertBlankPlannerRun,
@@ -250,13 +251,16 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
   const earnings = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of runs) {
+      // A backload shown here on its COLLECTION day bills on its delivery
+      // day — count its revenue there, not twice.
+      if (r.date !== date) continue;
       const v = r.vehicle?.trim() || "—";
       map.set(v, (map.get(v) ?? 0) + (r.revenue ?? 0));
     }
     const list = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
     const total = list.reduce((s, [, v]) => s + v, 0);
     return { list, total };
-  }, [runs]);
+  }, [runs, date]);
 
   // SUBBY COST is rare — only show the column when at least one leg in
   // today's grid has vehicle=SUBBY. Saves 70px of horizontal space on
@@ -357,6 +361,7 @@ const PlannerGrid = forwardRef<PlannerGridHandle, PlannerGridProps>(function Pla
                     <SortableRow
                       key={r.id}
                       run={r}
+                      sheetDate={date}
                       editable={editable}
                       busy={busy}
                       order={order}
@@ -494,6 +499,9 @@ function visibleColumnsWidthSum(
  */
 interface SortableRowProps {
   run: PlannedRun;
+  /** The day this sheet is for — a row whose `date` differs is a backload
+   *  appearing on its collection day. */
+  sheetDate: string;
   editable: boolean;
   busy: boolean;
   order: ReadonlyArray<string>;
@@ -508,6 +516,7 @@ interface SortableRowProps {
 
 function SortableRow({
   run: r,
+  sheetDate,
   editable,
   busy,
   order,
@@ -568,6 +577,7 @@ function SortableRow({
           <React.Fragment key={id}>
             {renderCell(id, r, {
               editable: editableNow,
+              sheetDate,
               customers,
               trailers,
               vehicles,
@@ -706,6 +716,8 @@ function SortableResizableHeader({
  */
 interface CellCtx {
   editable: boolean;
+  /** The day the sheet is for; see SortableRowProps.sheetDate. */
+  sheetDate: string;
   customers: ReadonlyArray<string>;
   trailers: ReadonlyArray<string>;
   vehicles: ReadonlyArray<string>;
@@ -716,14 +728,35 @@ interface CellCtx {
 function renderCell(id: string, r: PlannedRun, ctx: CellCtx): React.ReactNode {
   const { editable, customers, trailers, vehicles, patchLocal, persist } = ctx;
   switch (id) {
-    case "collection":
+    case "collection": {
+      // A backload that collects one day and delivers the next sits on both
+      // days' sheets. Say which half of the job this sheet is looking at, so
+      // the operator doesn't read tomorrow's delivery as today's.
+      const crossDay = isCrossDayCollection(r);
+      const note = !crossDay
+        ? null
+        : r.date === ctx.sheetDate
+          ? `collected ${shortDate(loadStartDate(r))}`
+          : `collection only · delivers ${shortDate(r.date)}`;
       return (
-        <TextCell
-          value={r.fromPostcode}
-          editable={editable}
-          onCommit={(v) => { patchLocal(r.id, { fromPostcode: v }); void persist(r.id, { fromPostcode: v }); }}
-        />
+        <td style={{ padding: editable ? "4px 6px" : undefined, verticalAlign: "top" }}>
+          <TextCellInner
+            value={r.fromPostcode}
+            editable={editable}
+            onCommit={(v) => { patchLocal(r.id, { fromPostcode: v }); void persist(r.id, { fromPostcode: v }); }}
+          />
+          {note && (
+            <div
+              className="muted"
+              style={{ fontSize: 10, marginTop: 2, whiteSpace: "nowrap", color: "var(--mlc-blue, #0B2A6B)" }}
+              title={`Collects ${loadStartDate(r)}, delivers ${r.date}`}
+            >
+              {note}
+            </div>
+          )}
+        </td>
       );
+    }
     case "delivery":
       return (
         <TextCell
@@ -890,37 +923,66 @@ function TextCell({
         style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         title={value || undefined}
       >
-        {value || <span className="muted">—</span>}
+        <TextCellInner value={value} editable={false} mono={mono} onCommit={onCommit} />
       </td>
     );
   }
   return (
     <td style={{ padding: "4px 6px" }}>
-      <input
-        type="text"
-        defaultValue={value}
-        title={value || undefined}
-        onBlur={(e) => {
-          const v = e.target.value;
-          if (v !== value) onCommit(v);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          if (e.key === "Escape") {
-            (e.target as HTMLInputElement).value = value;
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
-        className={`input ${mono ? "mono" : ""}`}
-        style={{
-          width: "100%",
-          height: 28,
-          padding: "0 6px",
-          fontSize: 12.5,
-          boxSizing: "border-box",
-        }}
-      />
+      <TextCellInner value={value} editable mono={mono} onCommit={onCommit} />
     </td>
+  );
+}
+
+/**
+ * The content of a TextCell without the wrapping <td>, for cells that need
+ * to stack something beneath the value (the collection cell's cross-day
+ * note). Read-only renders the value or an em-dash; editable renders the
+ * blur-to-commit input.
+ */
+function TextCellInner({
+  value,
+  editable,
+  mono,
+  onCommit,
+}: {
+  value: string;
+  editable: boolean;
+  mono?: boolean;
+  onCommit: (v: string) => void;
+}) {
+  if (!editable) {
+    return value ? (
+      <span className={mono ? "mono" : undefined}>{value}</span>
+    ) : (
+      <span className="muted">—</span>
+    );
+  }
+  return (
+    <input
+      type="text"
+      defaultValue={value}
+      title={value || undefined}
+      onBlur={(e) => {
+        const v = e.target.value;
+        if (v !== value) onCommit(v);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          (e.target as HTMLInputElement).value = value;
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={`input ${mono ? "mono" : ""}`}
+      style={{
+        width: "100%",
+        height: 28,
+        padding: "0 6px",
+        fontSize: 12.5,
+        boxSizing: "border-box",
+      }}
+    />
   );
 }
 

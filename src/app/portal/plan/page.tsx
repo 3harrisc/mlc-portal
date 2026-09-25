@@ -1104,6 +1104,7 @@ export default function PlanPage() {
                       key={s.id}
                       stop={s}
                       index={idx}
+                      eta={scheduleRows.find((r) => r.stopId === s.id)}
                       onRemove={() => removeStop(s.id)}
                     />
                   ))}
@@ -1137,7 +1138,11 @@ export default function PlanPage() {
                     border: "1px solid var(--line)",
                     marginBottom: 6,
                     background:
-                      r.kind === "break" ? "var(--warn-bg)" : "var(--surface)",
+                      r.status === "late"
+                        ? "var(--err-bg)"
+                        : r.kind === "break" || r.kind === "wait" || r.status === "nextday"
+                          ? "var(--warn-bg)"
+                          : "var(--surface)",
                   }}
                 >
                   <div style={{ fontSize: 12.5 }}>
@@ -1147,13 +1152,27 @@ export default function PlanPage() {
                     </span>
                     <span
                       style={
-                        r.kind === "break"
-                          ? { color: "var(--warn)", fontWeight: 600 }
-                          : undefined
+                        r.status === "late"
+                          ? { color: "var(--err)", fontWeight: 600 }
+                          : r.kind === "break" || r.kind === "wait" || r.status === "nextday"
+                            ? { color: "var(--warn)", fontWeight: 600 }
+                            : undefined
                       }
                     >
                       {r.label}
                     </span>
+                    {r.note && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          color: r.status === "late" ? "var(--err)" : "var(--ink-500)",
+                          fontWeight: r.status === "late" ? 600 : undefined,
+                        }}
+                      >
+                        {r.note}
+                      </span>
+                    )}
                   </div>
                   <div className="muted mono tnum" style={{ fontSize: 11.5 }}>
                     {r.minutes} min
@@ -1661,10 +1680,12 @@ function pinElement({
 function SortableStopRow({
   stop,
   index,
+  eta,
   onRemove,
 }: {
   stop: Stop;
   index: number;
+  eta?: ScheduleRow;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -1739,6 +1760,33 @@ function SortableStopRow({
           Open {stop.open}–{stop.close}
         </div>
       </div>
+      {eta && (
+        <div
+          className="mono tnum"
+          title={eta.note}
+          style={{
+            fontSize: 11,
+            textAlign: "right",
+            color:
+              eta.status === "late"
+                ? "var(--err)"
+                : eta.status === "wait" || eta.status === "nextday"
+                  ? "var(--warn)"
+                  : "var(--ok)",
+          }}
+        >
+          <div className="bold">ETA {eta.at}</div>
+          <div style={{ fontSize: 10 }}>
+            {eta.status === "late"
+              ? "Late"
+              : eta.status === "nextday"
+                ? "Next day"
+                : eta.status === "wait"
+                  ? "Early – waits"
+                  : "On time"}
+          </div>
+        </div>
+      )}
       <button
         type="button"
         className="btn sm ghost"

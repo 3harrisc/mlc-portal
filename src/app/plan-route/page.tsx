@@ -30,7 +30,8 @@ import { fetchCustomers, DEFAULT_BASE } from "@/lib/customers";
 import type { Customer } from "@/types/runs";
 import { normalizePostcode } from "@/lib/postcode-utils";
 import { haversineKm, type LngLat } from "@/lib/geo-utils";
-import { timeToMinutes, minutesToTime } from "@/lib/time-utils";
+import { timeToMinutes } from "@/lib/time-utils";
+import { buildSchedule, type ScheduleRow } from "@/lib/portal/planning";
 
 type Stop = {
   id: string;
@@ -40,11 +41,6 @@ type Stop = {
   open?: string; // "HH:MM"
   close?: string; // "HH:MM"
 };
-
-type ScheduleRow =
-  | { kind: "drive"; label: string; minutes: number; at: string }
-  | { kind: "break"; label: string; minutes: number; at: string }
-  | { kind: "service"; label: string; minutes: number; at: string };
 
 type LegRow = { label: string; mins: number; km: number };
 
@@ -129,59 +125,6 @@ function computeBreakMinutesForLegs(legMins: number[], includeBreaks: boolean) {
     driveSinceBreak += driveMins;
   }
   return breakTotal;
-}
-
-function buildSchedule(
-  startTime: string,
-  orderedStops: Stop[],
-  stopLegMins: number[],
-  serviceMinsDefault: number,
-  includeBreaks: boolean,
-  fromPostcode?: string
-) {
-  const rows: ScheduleRow[] = [];
-  let t = timeToMinutes(startTime) ?? 480;
-  let driveSinceBreak = 0;
-
-  rows.push({
-    kind: "service",
-    label: `Depart from ${fromPostcode || "base"}`,
-    minutes: 0,
-    at: minutesToTime(t),
-  });
-
-  for (let i = 0; i < orderedStops.length; i++) {
-    const driveMins = stopLegMins[i] ?? 0;
-
-    if (
-      includeBreaks &&
-      driveSinceBreak > 0 &&
-      driveSinceBreak + driveMins > MAX_DRIVE_BEFORE_BREAK_MINS
-    ) {
-      rows.push({ kind: "break", label: "45 min break", minutes: BREAK_MINS, at: minutesToTime(t) });
-      t += BREAK_MINS;
-      driveSinceBreak = 0;
-    }
-
-    rows.push({
-      kind: "drive",
-      label: `Drive to Stop ${i + 1} (${orderedStops[i].postcode})`,
-      minutes: driveMins,
-      at: minutesToTime(t),
-    });
-    t += driveMins;
-    driveSinceBreak += driveMins;
-
-    rows.push({
-      kind: "service",
-      label: `Arrive Stop ${i + 1} (${orderedStops[i].postcode})`,
-      minutes: serviceMinsDefault,
-      at: minutesToTime(t),
-    });
-    t += serviceMinsDefault;
-  }
-
-  return rows;
 }
 
 function SortableStopRow({
@@ -1390,14 +1333,15 @@ export default function PlanRoutePage() {
         {scheduleRows.length > 0 && (
           <div className="mt-6 border border-white/10 rounded-2xl p-6 bg-white/5">
             <h3 className="text-xl font-semibold mb-2">Driver schedule (HGV rules)</h3>
-            <div className="text-xs text-gray-400 mb-4">Driving-time only • {includeBreaks ? "includes" : "does NOT include"} 45 min breaks after 4h30 driving • HGV time multiplier applied</div>
+            <div className="text-xs text-gray-400 mb-4">Waits for booking / opening times • {includeBreaks ? "includes" : "does NOT include"} 45 min breaks after 4h30 driving • HGV time multiplier applied</div>
             <ul className="space-y-2">
               {scheduleRows.map((r, idx) => (
                 <li key={idx} className="flex items-center justify-between border border-white/10 rounded-xl p-3">
                   <div className="text-sm">
                     <span className="font-semibold">{r.at}</span>
                     <span className="mx-2 text-gray-600">•</span>
-                    <span className={r.kind === "break" ? "text-yellow-300 font-semibold" : ""}>{r.label}</span>
+                    <span className={r.status === "late" ? "text-red-400 font-semibold" : r.kind === "break" || r.kind === "wait" || r.status === "nextday" ? "text-yellow-300 font-semibold" : ""}>{r.label}</span>
+                    {r.note && <span className={`ml-2 text-xs ${r.status === "late" ? "text-red-400 font-semibold" : "text-gray-400"}`}>{r.note}</span>}
                   </div>
                   <div className="text-sm text-gray-400">{r.minutes} mins</div>
                 </li>

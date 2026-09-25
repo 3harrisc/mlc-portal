@@ -43,20 +43,46 @@ describe("buildSchedule", () => {
     expect(wait.label).toMatch(/counts as break/);
   });
 
-  it("flags a missed booking and an after-close arrival as late", () => {
+  it("flags a missed booking as late", () => {
+    const rows = buildSchedule("08:00", [stop("A", { time: "08:30" })], [60], 25, false);
+    expect(arrivals(rows)).toEqual([["A", "09:00", "late"]]);
+    expect(rows.find((r) => r.stopId === "A")!.note).toBe("Late 30 min for 08:30 booking");
+  });
+
+  it("rolls a drop that misses closing to next day's opening, and later drops follow", () => {
     const rows = buildSchedule(
       "08:00",
-      [stop("A", { time: "08:30" }), stop("B", { close: "09:00" })],
-      [60, 60],
+      [stop("A"), stop("B"), stop("C")],
+      [480, 90, 30],
       25,
       false,
     );
+    // A 16:00 ok; leave 16:25, B would arrive 17:55 (shut) → 08:00 +1d; C 08:55 +1d
     expect(arrivals(rows)).toEqual([
-      ["A", "09:00", "late"],
-      ["B", "10:25", "late"],
+      ["A", "16:00", "ok"],
+      ["B", "08:00 +1d", "nextday"],
+      ["C", "08:55 +1d", "ok"],
     ]);
-    expect(rows.find((r) => r.stopId === "A")!.note).toBe("Late 30 min for 08:30 booking");
-    expect(rows.find((r) => r.stopId === "B")!.note).toBe("Arrives 1h 25m after 09:00 close");
+    const overnight = rows.find((r) => r.kind === "wait")!;
+    expect(overnight.at).toBe("17:55");
+    expect(overnight.label).toMatch(/Overnight/);
+  });
+
+  it("resets the driving clock after an overnight wait", () => {
+    const rows = buildSchedule(
+      "08:00",
+      [stop("A"), stop("B"), stop("C")],
+      [240, 300, 200],
+      0,
+      true,
+    );
+    // A 12:00, 45 break (240+300>270), B 17:45 → next day 08:00; C 11:20 +1d with no extra break
+    expect(arrivals(rows)).toEqual([
+      ["A", "12:00", "ok"],
+      ["B", "08:00 +1d", "nextday"],
+      ["C", "11:20 +1d", "ok"],
+    ]);
+    expect(rows.filter((r) => r.kind === "break")).toHaveLength(1);
   });
 
   it("marks times past midnight with +1d", () => {

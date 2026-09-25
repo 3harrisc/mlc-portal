@@ -25,8 +25,12 @@ export interface ScheduleRow {
   at: string;
   /** Set on the "Arrive Stop n" row so the stop list can show its ETA. */
   stopId?: string;
-  /** ok = within window, wait = arrived early and waited, late = missed booking / closing. */
-  status?: "ok" | "wait" | "late";
+  /**
+   * ok = within window, wait = arrived early and waited, nextday = site shut
+   * by the time the truck got there so it's delivered at next day's opening,
+   * late = missed booking.
+   */
+  status?: "ok" | "wait" | "nextday" | "late";
   /** Short human note, e.g. "Late 25 min for 10:00 booking". */
   note?: string;
 }
@@ -272,7 +276,16 @@ function simulate(
     driveSinceBreak += driveMins;
 
     const arrive = t;
-    const { earliest, latest, booked } = stopWindow(stop);
+    const win = stopWindow(stop);
+    const { booked } = win;
+    let { earliest, latest } = win;
+    // Opening hours repeat daily, so measure them against the day the truck
+    // arrives on. Booking times stay pinned to the planned day.
+    if (!booked) {
+      const dayStart = Math.floor(arrive / 1440) * 1440;
+      if (earliest != null) earliest += dayStart;
+      if (latest != null) latest += dayStart;
+    }
     const arriveRow: ScheduleRow = {
       kind: "service",
       label: `Arrive Stop ${i + 1} (${stop.postcode})`,
@@ -282,7 +295,23 @@ function simulate(
       status: "ok",
     };
 
-    if (earliest != null && arrive < earliest) {
+    if (!booked && earliest != null && latest != null && arrive > latest) {
+      // Site has shut: park up overnight and deliver when it opens tomorrow.
+      // The overnight rest also resets the driving clock.
+      const resume = earliest + 1440;
+      rows.push({
+        kind: "wait",
+        label: `Overnight — closed at ${stop.close}, deliver at ${stop.open} next day`,
+        minutes: resume - arrive,
+        at: clock(arrive),
+      });
+      driveSinceBreak = 0;
+      t = resume;
+      arriveRow.at = clock(t);
+      arriveRow.status = "nextday";
+      arriveRow.note = `Next day — would arrive ${clock(arrive)}, after ${stop.close} close`;
+      rows.push(arriveRow);
+    } else if (earliest != null && arrive < earliest) {
       const wait = earliest - arrive;
       if (i === 0) firstWait = wait;
       // A wait of 45+ min on site doubles as the driver's break.
@@ -310,9 +339,7 @@ function simulate(
         const late = arrive - latest;
         lateMins += late;
         arriveRow.status = "late";
-        arriveRow.note = booked
-          ? `Late ${fmtMins(late)} for ${stop.time} booking`
-          : `Arrives ${fmtMins(late)} after ${stop.close} close`;
+        arriveRow.note = `Late ${fmtMins(late)} for ${stop.time} booking`;
       }
       rows.push(arriveRow);
     }
@@ -326,8 +353,9 @@ function simulate(
  *
  * Each stop's ETA respects its booking time (or opening hours when there's
  * no booking): arriving early inserts a wait until the slot, and later drops
- * are pushed back accordingly. Missed bookings / after-close arrivals are
- * flagged `status: "late"`. If the first drop would otherwise mean sitting
+ * are pushed back accordingly. A drop that can't be reached before closing
+ * rolls to next day's opening (`status: "nextday"`) and the rest of the run
+ * carries on from there. Missed bookings are flagged `status: "late"`. If the first drop would otherwise mean sitting
  * outside a closed site, departure is pushed later so the truck arrives as
  * the first slot opens — unless that makes a later drop later.
  */

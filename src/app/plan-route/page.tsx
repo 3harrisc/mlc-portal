@@ -1340,7 +1340,7 @@ export default function PlanRoutePage() {
                   <div className="text-sm">
                     <span className="font-semibold">{r.at}</span>
                     <span className="mx-2 text-gray-600">•</span>
-                    <span className={r.status === "late" ? "text-red-400 font-semibold" : r.kind === "break" || r.kind === "wait" ? "text-yellow-300 font-semibold" : ""}>{r.label}</span>
+                    <span className={r.status === "late" ? "text-red-400 font-semibold" : r.kind === "break" || r.kind === "wait" || r.status === "nextday" ? "text-yellow-300 font-semibold" : ""}>{r.label}</span>
                     {r.note && <span className={`ml-2 text-xs ${r.status === "late" ? "text-red-400 font-semibold" : "text-gray-400"}`}>{r.note}</span>}
                   </div>
                   <div className="text-sm text-gray-400">{r.minutes} mins</div>

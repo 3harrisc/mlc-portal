@@ -1140,7 +1140,7 @@ export default function PlanPage() {
                     background:
                       r.status === "late"
                         ? "var(--err-bg)"
-                        : r.kind === "break" || r.kind === "wait"
+                        : r.kind === "break" || r.kind === "wait" || r.status === "nextday"
                           ? "var(--warn-bg)"
                           : "var(--surface)",
                   }}
@@ -1154,7 +1154,7 @@ export default function PlanPage() {
                       style={
                         r.status === "late"
                           ? { color: "var(--err)", fontWeight: 600 }
-                          : r.kind === "break" || r.kind === "wait"
+                          : r.kind === "break" || r.kind === "wait" || r.status === "nextday"
                             ? { color: "var(--warn)", fontWeight: 600 }
                             : undefined
                       }
@@ -1770,14 +1770,20 @@ function SortableStopRow({
             color:
               eta.status === "late"
                 ? "var(--err)"
-                : eta.status === "wait"
+                : eta.status === "wait" || eta.status === "nextday"
                   ? "var(--warn)"
                   : "var(--ok)",
           }}
         >
           <div className="bold">ETA {eta.at}</div>
           <div style={{ fontSize: 10 }}>
-            {eta.status === "late" ? "Late" : eta.status === "wait" ? "Early – waits" : "On time"}
+            {eta.status === "late"
+              ? "Late"
+              : eta.status === "nextday"
+                ? "Next day"
+                : eta.status === "wait"
+                  ? "Early – waits"
+                  : "On time"}
           </div>
         </div>
       )}

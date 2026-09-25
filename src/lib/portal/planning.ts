@@ -16,10 +16,20 @@ export interface Stop {
   close?: string; // "HH:MM"
 }
 
-export type ScheduleRow =
-  | { kind: "drive"; label: string; minutes: number; at: string }
-  | { kind: "break"; label: string; minutes: number; at: string }
-  | { kind: "service"; label: string; minutes: number; at: string };
+export type ScheduleRowKind = "drive" | "break" | "wait" | "service";
+
+export interface ScheduleRow {
+  kind: ScheduleRowKind;
+  label: string;
+  minutes: number;
+  at: string;
+  /** Set on the "Arrive Stop n" row so the stop list can show its ETA. */
+  stopId?: string;
+  /** ok = within window, wait = arrived early and waited, late = missed booking / closing. */
+  status?: "ok" | "wait" | "late";
+  /** Short human note, e.g. "Late 25 min for 10:00 booking". */
+  note?: string;
+}
 
 export interface LegRow {
   label: string;
@@ -175,27 +185,68 @@ export function computeBreakMinutesForLegs(
   return breakTotal;
 }
 
-/** Build a driver schedule (drive / break / service rows) from leg mins + service time. */
-export function buildSchedule(
-  startTime: string,
+function fmtMins(m: number): string {
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h === 0) return `${mm} min`;
+  return mm === 0 ? `${h}h` : `${h}h ${String(mm).padStart(2, "0")}m`;
+}
+
+/** Minutes-from-midnight → "HH:MM", with a "+1d" suffix once past midnight. */
+function clock(t: number): string {
+  const day = Math.floor(t / 1440);
+  return minutesToTime(((t % 1440) + 1440) % 1440) + (day > 0 ? ` +${day}d` : "");
+}
+
+/**
+ * The window a stop's service must start in. A booking time pins both ends;
+ * otherwise the opening hours apply. Either end may be missing.
+ */
+function stopWindow(stop: Stop): {
+  earliest: number | null;
+  latest: number | null;
+  booked: boolean;
+} {
+  const booking = timeToMinutes(stop.time);
+  if (booking != null) return { earliest: booking, latest: booking, booked: true };
+  return {
+    earliest: timeToMinutes(stop.open),
+    latest: timeToMinutes(stop.close),
+    booked: false,
+  };
+}
+
+interface SimResult {
+  rows: ScheduleRow[];
+  lateMins: number;
+  firstWait: number;
+}
+
+function simulate(
+  startMins: number,
   orderedStops: Stop[],
   stopLegMins: number[],
-  serviceMinsDefault: number,
+  serviceMins: number,
   includeBreaks: boolean,
-  fromLabel?: string,
-): ScheduleRow[] {
+  fromLabel: string,
+  departNote?: string,
+): SimResult {
   const rows: ScheduleRow[] = [];
-  let t = timeToMinutes(startTime) ?? 480;
+  let t = startMins;
   let driveSinceBreak = 0;
+  let lateMins = 0;
+  let firstWait = 0;
 
   rows.push({
     kind: "service",
-    label: `Depart from ${fromLabel || "base"}`,
+    label: `Depart from ${fromLabel}`,
     minutes: 0,
-    at: minutesToTime(t),
+    at: clock(t),
+    note: departNote,
   });
 
   for (let i = 0; i < orderedStops.length; i++) {
+    const stop = orderedStops[i];
     const driveMins = stopLegMins[i] ?? 0;
     if (
       includeBreaks &&
@@ -206,28 +257,110 @@ export function buildSchedule(
         kind: "break",
         label: "45 min break",
         minutes: BREAK_MINS,
-        at: minutesToTime(t),
+        at: clock(t),
       });
       t += BREAK_MINS;
       driveSinceBreak = 0;
     }
     rows.push({
       kind: "drive",
-      label: `Drive to Stop ${i + 1} (${orderedStops[i].postcode})`,
+      label: `Drive to Stop ${i + 1} (${stop.postcode})`,
       minutes: driveMins,
-      at: minutesToTime(t),
+      at: clock(t),
     });
     t += driveMins;
     driveSinceBreak += driveMins;
-    rows.push({
+
+    const arrive = t;
+    const { earliest, latest, booked } = stopWindow(stop);
+    const arriveRow: ScheduleRow = {
       kind: "service",
-      label: `Arrive Stop ${i + 1} (${orderedStops[i].postcode})`,
-      minutes: serviceMinsDefault,
-      at: minutesToTime(t),
-    });
-    t += serviceMinsDefault;
+      label: `Arrive Stop ${i + 1} (${stop.postcode})`,
+      minutes: serviceMins,
+      at: clock(arrive),
+      stopId: stop.id,
+      status: "ok",
+    };
+
+    if (earliest != null && arrive < earliest) {
+      const wait = earliest - arrive;
+      if (i === 0) firstWait = wait;
+      // A wait of 45+ min on site doubles as the driver's break.
+      const countsAsBreak = includeBreaks && wait >= BREAK_MINS;
+      if (countsAsBreak) driveSinceBreak = 0;
+      rows.push(arriveRow);
+      arriveRow.minutes = 0;
+      arriveRow.status = "wait";
+      arriveRow.note = `Early — ${booked ? "booked" : "opens"} ${stop.time ?? stop.open}`;
+      rows.push({
+        kind: "wait",
+        label: `Wait ${fmtMins(wait)} for ${booked ? `${stop.time} booking` : `${stop.open} opening`}${countsAsBreak ? " (counts as break)" : ""}`,
+        minutes: wait,
+        at: clock(arrive),
+      });
+      t = earliest;
+      rows.push({
+        kind: "service",
+        label: `Tip Stop ${i + 1} (${stop.postcode})`,
+        minutes: serviceMins,
+        at: clock(t),
+      });
+    } else {
+      if (latest != null && arrive > latest) {
+        const late = arrive - latest;
+        lateMins += late;
+        arriveRow.status = "late";
+        arriveRow.note = booked
+          ? `Late ${fmtMins(late)} for ${stop.time} booking`
+          : `Arrives ${fmtMins(late)} after ${stop.close} close`;
+      }
+      rows.push(arriveRow);
+    }
+    t += serviceMins;
   }
-  return rows;
+  return { rows, lateMins, firstWait };
+}
+
+/**
+ * Build a driver schedule (drive / break / wait / service rows).
+ *
+ * Each stop's ETA respects its booking time (or opening hours when there's
+ * no booking): arriving early inserts a wait until the slot, and later drops
+ * are pushed back accordingly. Missed bookings / after-close arrivals are
+ * flagged `status: "late"`. If the first drop would otherwise mean sitting
+ * outside a closed site, departure is pushed later so the truck arrives as
+ * the first slot opens — unless that makes a later drop later.
+ */
+export function buildSchedule(
+  startTime: string,
+  orderedStops: Stop[],
+  stopLegMins: number[],
+  serviceMinsDefault: number,
+  includeBreaks: boolean,
+  fromLabel?: string,
+): ScheduleRow[] {
+  const start = timeToMinutes(startTime) ?? 480;
+  const from = fromLabel || "base";
+  const base = simulate(
+    start,
+    orderedStops,
+    stopLegMins,
+    serviceMinsDefault,
+    includeBreaks,
+    from,
+  );
+  if (base.firstWait <= 0) return base.rows;
+
+  const shifted = simulate(
+    start + base.firstWait,
+    orderedStops,
+    stopLegMins,
+    serviceMinsDefault,
+    includeBreaks,
+    from,
+    `Delayed from ${startTime} to meet first drop's slot`,
+  );
+  return shifted.lateMins <= base.lateMins ? shifted.rows : base.rows;
 }
 
 /**

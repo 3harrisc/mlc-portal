@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
+import DriverDocumentsBanner from "@/components/hr/DriverDocumentsBanner";
 import { createClient } from "@/lib/supabase/client";
 import { updateRun as updateRunAction } from "@/app/actions/runs";
 import { createCost, deleteCost, listDriverCosts } from "@/app/actions/costs";
@@ -648,6 +649,9 @@ export default function DriverPage() {
           <div className="text-gray-400">
             Contact your admin to assign a vehicle to your account.
           </div>
+          <div className="mt-6 text-left">
+            <DriverDocumentsBanner />
+          </div>
         </div>
       </div>
     );
@@ -677,6 +681,9 @@ export default function DriverPage() {
             <div className="text-gray-400">
               No run scheduled for {todayISO()} on vehicle{" "}
               {profile.assigned_vehicle}.
+            </div>
+            <div className="mt-6 text-left">
+              <DriverDocumentsBanner />
             </div>
           </div>
         </div>
@@ -710,6 +717,8 @@ export default function DriverPage() {
       </div>
 
       <div className="max-w-lg mx-auto p-4 space-y-4">
+        <DriverDocumentsBanner />
+
         {/* Run info */}
         <div className="border border-white/10 rounded-xl p-4 bg-white/5">
           <div className="text-sm text-gray-400">

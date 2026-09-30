@@ -47,11 +47,13 @@ const ADMIN: NavItem[] = [
   { href: "/admin/trailers", icon: "box", label: "Trailers" },
   { href: "/admin/depots", icon: "pin", label: "Depots" },
   { href: "/admin/drivers", icon: "user", label: "Drivers" },
+  { href: "/admin/hr", icon: "doc", label: "HR documents" },
   { href: "/admin/users", icon: "settings", label: "Admin users" },
 ];
 
 const DRIVER: NavItem[] = [
   { href: "/driver", icon: "truck", label: "Driver mode" },
+  { href: "/driver/documents", icon: "doc", label: "My documents" },
 ];
 
 function isActive(pathname: string, item: NavItem): boolean {

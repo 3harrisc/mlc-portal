@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import Icon from "@/components/portal/Icon";
@@ -8,6 +8,7 @@ import { useToast } from "@/components/portal/ToastContext";
 import UploadDocumentForm from "@/components/hr/UploadDocumentForm";
 import ComplianceMatrix from "@/components/hr/ComplianceMatrix";
 import CountersignQueue from "@/components/hr/CountersignQueue";
+import SendToDriverForm from "@/components/hr/SendToDriverForm";
 import {
   archiveDocument,
   deleteDraftDocument,
@@ -35,6 +36,7 @@ export default function AdminHrPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && profile?.role !== "admin") router.push("/");
@@ -181,14 +183,19 @@ export default function AdminHrPage() {
                 const assigned = overview?.assignments.filter((a) => a.documentId === d.id).length ?? 0;
                 const busy = busyId === d.id;
                 return (
-                  <tr key={d.id}>
+                  <Fragment key={d.id}>
+                  <tr>
                     <td>
                       <div className="bold" style={{ fontSize: 12.5 }}>{d.title}</div>
                       <div className="muted mono" style={{ fontSize: 10.5 }}>{d.fileName}</div>
                     </td>
                     <td style={{ fontSize: 12 }}>{categoryLabel(d.category)}</td>
                     <td style={{ fontSize: 12 }}>
-                      {d.audience === "all" ? "All drivers" : `${assigned} selected`}
+                      {d.audience === "all"
+                        ? "All drivers"
+                        : d.collectsParticulars
+                          ? `Blank contract · sent to ${assigned}`
+                          : `${assigned} selected`}
                       {d.requiresCountersign && <span className="muted"> + MLC</span>}
                     </td>
                     <td style={{ fontSize: 12 }}>{d.resignMonths ? `Every ${d.resignMonths} mo` : "Once"}</td>
@@ -203,6 +210,15 @@ export default function AdminHrPage() {
                     </td>
                     <td>
                       <div className="row gap-4" style={{ justifyContent: "flex-end" }}>
+                        {d.audience === "selected" && d.status !== "archived" && (
+                          <button
+                            className="btn sm"
+                            type="button"
+                            onClick={() => setSendingId(sendingId === d.id ? null : d.id)}
+                          >
+                            {sendingId === d.id ? "Close" : "Send to driver"}
+                          </button>
+                        )}
                         <button
                           className="btn sm ghost"
                           type="button"
@@ -254,6 +270,21 @@ export default function AdminHrPage() {
                       </div>
                     </td>
                   </tr>
+                  {sendingId === d.id && overview && (
+                    <tr>
+                      <td colSpan={7} style={{ background: "var(--neutral-bg)" }}>
+                        <SendToDriverForm
+                          document={d}
+                          overview={overview}
+                          onDone={(msg) => {
+                            showToast(msg);
+                            load();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
               {overview && docs.length === 0 && (

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   appendCountersignCertificate,
+  appendParticularsSchedule,
+  ukDate,
   appendSignatureCertificate,
   assertSignablePdf,
   pdfSafeText,
@@ -101,5 +103,22 @@ describe("appendCountersignCertificate", () => {
       inputSha256: sha256Hex(driverSigned),
     });
     expect((await PDFDocument.load(countersigned)).getPageCount()).toBe(4);
+  });
+});
+
+describe("appendParticularsSchedule", () => {
+  it("adds one unsigned schedule page", async () => {
+    const out = await appendParticularsSchedule(await twoPagePdf(), "HGV Driver Employment Contract", {
+      legalName: "Łukasz Nowak",
+      address: "1 High Street, Cheltenham, GL50 1AA",
+      startDate: "2026-10-05",
+      continuousEmploymentDate: "2026-10-05",
+    });
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(3);
+  });
+
+  it("formats dates without shifting the day", () => {
+    expect(ukDate("2026-10-05")).toBe("5 October 2026");
+    expect(ukDate("2027-03-28")).toBe("28 March 2027");
   });
 });

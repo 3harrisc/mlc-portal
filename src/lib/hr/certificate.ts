@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ukDate } from "./format";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
 export interface CertificateInfo {
@@ -94,21 +95,25 @@ function ukTime(d: Date): string {
 
 interface CertificatePage {
   heading: string;
+  intro?: string;
   fields: [label: string, value: string][];
-  declaration: string;
-  verification: string[];
+  declaration?: string;
+  verification?: string[];
 }
 
-/** Append one A4 certificate page. The existing pages are left untouched. */
+/**
+ * Append one A4 page (a certificate, or a schedule when signaturePng is null).
+ * The existing pages are left untouched.
+ */
 async function appendCertificatePage(
   inputPdf: Uint8Array,
-  signaturePng: Uint8Array,
+  signaturePng: Uint8Array | null,
   content: CertificatePage,
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(inputPdf);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const sig = await pdf.embedPng(signaturePng);
+  const sig = signaturePng ? await pdf.embedPng(signaturePng) : null;
 
   const page: PDFPage = pdf.addPage([595.28, 841.89]); // A4
   const margin = 50;
@@ -138,13 +143,19 @@ async function appendCertificatePage(
   });
   y -= 18;
 
+  if (content.intro) text(content.intro, { size: 10.5, gap: 12 });
+
   for (const [l, v] of content.fields) {
     label(l);
     text(v, { size: 10.5, gap: 8 });
   }
 
-  label("Declaration");
-  text(content.declaration, { size: 10.5, gap: 12 });
+  if (content.declaration) {
+    label("Declaration");
+    text(content.declaration, { size: 10.5, gap: 12 });
+  }
+
+  if (!sig) return pdf.save();
 
   label("Signature", 2);
   const boxH = 90;
@@ -165,8 +176,10 @@ async function appendCertificatePage(
   });
   y -= boxH + 28;
 
-  label("Verification");
-  for (const line of content.verification) text(line, { size: 8, color: muted });
+  if (content.verification?.length) {
+    label("Verification");
+    for (const line of content.verification) text(line, { size: 8, color: muted });
+  }
 
   return pdf.save();
 }
@@ -243,3 +256,30 @@ export async function appendCountersignCertificate(
     ],
   });
 }
+
+/**
+ * Schedule of Particulars page for a per-driver document (e.g. the employment
+ * contract): the driver's confirmed name and address plus the dates MLC set.
+ * Added before the signature certificate so the signature covers it.
+ */
+export async function appendParticularsSchedule(
+  pdf: Uint8Array,
+  documentTitle: string,
+  p: { legalName: string; address: string; startDate: string; continuousEmploymentDate: string },
+): Promise<Uint8Array> {
+  return appendCertificatePage(pdf, null, {
+    heading: "Schedule of Particulars",
+    intro:
+      `This schedule forms part of "${documentTitle}" and completes the details referred to in it. ` +
+      "The employee confirmed their name and address when signing; MLC Transport Ltd set the dates.",
+    fields: [
+      ["Employer", "MLC Transport Ltd"],
+      ["Employee full legal name", p.legalName],
+      ["Employee home address", p.address],
+      ["Start date", ukDate(p.startDate)],
+      ["Continuous employment date", ukDate(p.continuousEmploymentDate)],
+    ],
+  });
+}
+
+export { ukDate };

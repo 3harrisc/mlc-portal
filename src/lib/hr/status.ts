@@ -98,3 +98,32 @@ export const STATUS_PRIORITY: Record<SignStatus, number> = {
   due_soon: 2,
   signed: 3,
 };
+
+/** Driver has signed, but MLC still has to countersign. */
+export function awaitingCountersign(doc: HrDocument, sig: HrSignature | null): boolean {
+  return doc.requiresCountersign && !!sig && !sig.countersign;
+}
+
+export interface PendingCountersign {
+  document: HrDocument;
+  signature: HrSignature;
+}
+
+/**
+ * Latest driver signatures still waiting for MLC, oldest first. Only live
+ * (published) documents count — archiving a document drops it from the queue.
+ */
+export function pendingCountersigns(
+  docs: HrDocument[],
+  signatures: HrSignature[],
+): PendingCountersign[] {
+  const byId = new Map(docs.map((d) => [d.id, d]));
+  const out: PendingCountersign[] = [];
+  for (const signature of latestSignatures(signatures).values()) {
+    const document = byId.get(signature.documentId);
+    if (document?.status === "published" && awaitingCountersign(document, signature)) {
+      out.push({ document, signature });
+    }
+  }
+  return out.sort((a, b) => a.signature.signedAt.localeCompare(b.signature.signedAt));
+}

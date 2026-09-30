@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
+  appendCountersignCertificate,
   appendSignatureCertificate,
   assertSignablePdf,
   pdfSafeText,
@@ -66,5 +67,39 @@ describe("appendSignatureCertificate", () => {
     });
     const reopened = await PDFDocument.load(signed);
     expect(reopened.getPageCount()).toBe(3);
+  });
+});
+
+describe("appendCountersignCertificate", () => {
+  it("adds a second certificate page after the driver's", async () => {
+    const driverSigned = await appendSignatureCertificate(await twoPagePdf(), PNG_1X1, {
+      signatureId: "sig-1",
+      documentTitle: "Driver contract",
+      documentCategory: "Contract",
+      documentId: "doc-1",
+      documentSha256: "a".repeat(64),
+      signedName: "Sam Driver",
+      driverName: "Sam Driver",
+      driverEmail: "sam@example.com",
+      signedAt: new Date("2026-09-30T10:00:00Z"),
+      ipAddress: null,
+      userAgent: null,
+      agreementText: "I agree.",
+    });
+    const countersigned = await appendCountersignCertificate(driverSigned, PNG_1X1, {
+      countersignatureId: "cs-1",
+      driverSignatureId: "sig-1",
+      documentTitle: "Driver contract",
+      signerName: "David Harris",
+      signerTitle: "Company Director",
+      signerEmail: "david@example.com",
+      driverSignedName: "Sam Driver",
+      signedAt: new Date("2026-10-01T09:00:00Z"),
+      ipAddress: "203.0.113.9",
+      userAgent: "Mozilla/5.0",
+      agreementText: "Signed for MLC.",
+      inputSha256: sha256Hex(driverSigned),
+    });
+    expect((await PDFDocument.load(countersigned)).getPageCount()).toBe(4);
   });
 });

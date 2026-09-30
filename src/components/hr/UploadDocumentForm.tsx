@@ -22,6 +22,8 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
   const [driverIds, setDriverIds] = useState<string[]>([]);
   const [resign, setResign] = useState("");
   const [publish, setPublish] = useState(true);
+  // Contracts need MLC's signature too; policies and H&S documents usually don't.
+  const [countersign, setCountersign] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,6 +73,7 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
         audience,
         driverIds: audience === "selected" ? driverIds : [],
         resignMonths,
+        requiresCountersign: countersign,
         publish,
       });
       if (res.error) throw new Error(res.error);
@@ -115,7 +118,11 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
           <select
             className="select"
             value={category}
-            onChange={(e) => setCategory(e.target.value as HrCategory)}
+            onChange={(e) => {
+              const c = e.target.value as HrCategory;
+              setCategory(c);
+              setCountersign(c === "contract");
+            }}
           >
             {HR_CATEGORIES.map((c) => (
               <option key={c.value} value={c.value}>
@@ -188,6 +195,11 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
             </div>
           </div>
         )}
+
+        <label className="row gap-8" style={{ gridColumn: "span 2", fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={countersign} onChange={(e) => setCountersign(e.target.checked)} />
+          Needs MLC countersignature after the driver signs (Callum Harris or David Harris)
+        </label>
 
         <label className="row gap-8" style={{ gridColumn: "span 2", fontSize: 12.5, cursor: "pointer" }}>
           <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} />

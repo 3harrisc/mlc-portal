@@ -7,6 +7,7 @@ import Icon from "@/components/portal/Icon";
 import { useToast } from "@/components/portal/ToastContext";
 import UploadDocumentForm from "@/components/hr/UploadDocumentForm";
 import ComplianceMatrix from "@/components/hr/ComplianceMatrix";
+import CountersignQueue from "@/components/hr/CountersignQueue";
 import {
   archiveDocument,
   deleteDraftDocument,
@@ -16,7 +17,7 @@ import {
   publishDocument,
   type HrOverview,
 } from "@/app/actions/hr";
-import { appliesToDriver, driverDocumentViews } from "@/lib/hr/status";
+import { appliesToDriver, driverDocumentViews, pendingCountersigns } from "@/lib/hr/status";
 import { categoryLabel, type HrDocument } from "@/types/hr";
 
 const STATUS_CLS: Record<HrDocument["status"], string> = {
@@ -71,6 +72,11 @@ export default function AdminHrPage() {
     }
     return out;
   }, [overview]);
+
+  const pending = useMemo(
+    () => (overview ? pendingCountersigns(overview.documents, overview.signatures) : []),
+    [overview],
+  );
 
   const openUrl = async (fetchUrl: () => Promise<{ url?: string; error?: string }>) => {
     // Open the tab synchronously so pop-up blockers allow it, then point it at the URL.
@@ -133,6 +139,19 @@ export default function AdminHrPage() {
         />
       )}
 
+      {overview && pending.length > 0 && (
+        <CountersignQueue
+          pending={pending}
+          drivers={overview.drivers}
+          myName={profile?.full_name ?? null}
+          onReview={(sigId) => openUrl(() => getSignedCopyUrl(sigId))}
+          onDone={(msg) => {
+            showToast(msg);
+            load();
+          }}
+        />
+      )}
+
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-header">
           <h3>Documents</h3>
@@ -170,6 +189,7 @@ export default function AdminHrPage() {
                     <td style={{ fontSize: 12 }}>{categoryLabel(d.category)}</td>
                     <td style={{ fontSize: 12 }}>
                       {d.audience === "all" ? "All drivers" : `${assigned} selected`}
+                      {d.requiresCountersign && <span className="muted"> + MLC</span>}
                     </td>
                     <td style={{ fontSize: 12 }}>{d.resignMonths ? `Every ${d.resignMonths} mo` : "Once"}</td>
                     <td className="mono tnum" style={{ fontSize: 12 }}>

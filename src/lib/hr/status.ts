@@ -77,12 +77,14 @@ export function driverDocumentViews(
     .filter((d) => appliesToDriver(d, driverId, assignments))
     .map((document) => {
       const lastSignature = latest.get(`${driverId}:${document.id}`) ?? null;
+      const assignment =
+        assignments.find((a) => a.documentId === document.id && a.driverId === driverId) ?? null;
       const { status, expiresAt } = signStatus(
         document.resignMonths,
         lastSignature?.signedAt ?? null,
         now,
       );
-      return { document, status, lastSignature, expiresAt };
+      return { document, status, lastSignature, expiresAt, assignment };
     });
 }
 

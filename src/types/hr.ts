@@ -48,6 +48,8 @@ export interface HrDocument {
   resignMonths: number | null;
   status: HrDocumentStatus;
   requiresCountersign: boolean;
+  /** Issued per driver with a Schedule of Particulars (name, address, start dates). */
+  collectsParticulars: boolean;
   createdAt: string;
   publishedAt: string | null;
 }
@@ -55,6 +57,17 @@ export interface HrDocument {
 export interface HrAssignment {
   documentId: string;
   driverId: string;
+  /** Set by MLC when sending a particulars document (YYYY-MM-DD). */
+  startDate: string | null;
+  continuousDate: string | null;
+}
+
+/** Details printed on the Schedule of Particulars page and stored on the signature. */
+export interface Particulars {
+  legalName: string;
+  address: string;
+  startDate: string;
+  continuousEmploymentDate: string;
 }
 
 export interface HrSignature {
@@ -83,6 +96,7 @@ export interface DriverDocumentView {
   status: SignStatus;
   lastSignature: HrSignature | null;
   expiresAt: string | null;
+  assignment: HrAssignment | null;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -99,8 +113,18 @@ export function rowToHrDocument(r: any): HrDocument {
     resignMonths: r.resign_months ?? null,
     status: r.status,
     requiresCountersign: r.requires_countersign ?? false,
+    collectsParticulars: r.collects_particulars ?? false,
     createdAt: r.created_at,
     publishedAt: r.published_at ?? null,
+  };
+}
+
+export function rowToHrAssignment(r: any): HrAssignment {
+  return {
+    documentId: r.document_id,
+    driverId: r.driver_id,
+    startDate: r.start_date ?? null,
+    continuousDate: r.continuous_employment_date ?? null,
   };
 }
 

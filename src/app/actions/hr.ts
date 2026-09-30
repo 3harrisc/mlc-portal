@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import {
+  ASSIGNMENT_SELECT,
   HR_BUCKET,
   SIGNATURE_SELECT,
   URL_TTL_SECONDS,
@@ -18,6 +19,7 @@ import {
   AGREEMENT_TEXT,
   HR_CATEGORIES,
   categoryLabel,
+  rowToHrAssignment,
   rowToHrDocument,
   rowToHrSignature,
   type DriverDocumentView,
@@ -27,6 +29,7 @@ import {
   type HrDocument,
   type HrDriver,
   type HrSignature,
+  type Particulars,
 } from "@/types/hr";
 import {
   appliesToDriver,
@@ -35,7 +38,9 @@ import {
   STATUS_PRIORITY,
 } from "@/lib/hr/status";
 import { looksLikePdf, parseSignatureDataUrl } from "@/lib/hr/signature-image";
+import { cleanDriverDetails } from "@/lib/hr/particulars";
 import {
+  appendParticularsSchedule,
   appendSignatureCertificate,
   assertSignablePdf,
   sha256Hex,
@@ -61,7 +66,7 @@ export async function listHrOverview(): Promise<{ data?: HrOverview; error?: str
     const db = getSupabaseAdmin();
     const [docs, assigns, sigs, drivers] = await Promise.all([
       db.from("hr_documents").select("*").order("created_at", { ascending: false }),
-      db.from("hr_document_assignments").select("document_id, driver_id"),
+      db.from("hr_document_assignments").select(ASSIGNMENT_SELECT),
       db.from("hr_signatures").select(SIGNATURE_SELECT),
       db
         .from("profiles")
@@ -74,10 +79,7 @@ export async function listHrOverview(): Promise<{ data?: HrOverview; error?: str
     return {
       data: {
         documents: (docs.data ?? []).map(rowToHrDocument),
-        assignments: (assigns.data ?? []).map((a) => ({
-          documentId: a.document_id,
-          driverId: a.driver_id,
-        })),
+        assignments: (assigns.data ?? []).map(rowToHrAssignment),
         signatures: (sigs.data ?? []).map(rowToHrSignature),
         drivers: (drivers.data ?? []).map((d) => ({
           id: d.id,
@@ -120,6 +122,8 @@ export interface FinalizeDocumentInput {
   driverIds: string[];
   resignMonths: number | null;
   requiresCountersign: boolean;
+  /** Per-driver document with a Schedule of Particulars; sent later via "Send to driver". */
+  collectsParticulars: boolean;
   publish: boolean;
 }
 
@@ -151,7 +155,11 @@ export async function finalizeDocument(
     return { error: "Unknown audience" };
   }
   const driverIds = [...new Set(input.driverIds ?? [])];
-  if (input.audience === "selected" && (driverIds.length === 0 || !driverIds.every((id) => UUID_RE.test(id)))) {
+  const particulars = input.collectsParticulars === true;
+  // Particulars documents are sent driver-by-driver with a start date, so they
+  // are always "selected" and may be uploaded with nobody assigned yet.
+  if (particulars) input.audience = "selected";
+  if (!driverIds.every((id) => UUID_RE.test(id)) || (input.audience === "selected" && !particulars && driverIds.length === 0)) {
     await discard();
     return { error: "Pick at least one driver." };
   }
@@ -180,6 +188,7 @@ export async function finalizeDocument(
         audience: input.audience,
         resign_months: resign,
         requires_countersign: input.requiresCountersign === true,
+        collects_particulars: particulars,
         status: input.publish ? "published" : "draft",
         published_at: input.publish ? now : null,
         created_by: admin.id,
@@ -188,7 +197,7 @@ export async function finalizeDocument(
       .single();
     if (error || !doc) throw new Error(error?.message ?? "Couldn't save document");
 
-    if (input.audience === "selected") {
+    if (input.audience === "selected" && !particulars && driverIds.length > 0) {
       const { error: aErr } = await db.from("hr_document_assignments").insert(
         driverIds.map((driver_id) => ({
           document_id: doc.id,
@@ -271,10 +280,10 @@ export async function getDocumentUrl(documentId: string): Promise<{ url?: string
       if (me.role !== "driver") return { error: "Not authorized" };
       const { data: assigns } = await db
         .from("hr_document_assignments")
-        .select("document_id, driver_id")
+        .select(ASSIGNMENT_SELECT)
         .eq("document_id", documentId)
         .eq("driver_id", me.id);
-      const assignments = (assigns ?? []).map((a) => ({ documentId: a.document_id, driverId: a.driver_id }));
+      const assignments = (assigns ?? []).map(rowToHrAssignment);
       if (!appliesToDriver(rowToHrDocument(row), me.id, assignments)) return { error: "Not authorized" };
     }
 
@@ -322,7 +331,7 @@ async function loadDriverViews(driverId: string): Promise<DriverDocumentView[]> 
   const db = getSupabaseAdmin();
   const [docs, assigns, sigs] = await Promise.all([
     db.from("hr_documents").select("*").eq("status", "published"),
-    db.from("hr_document_assignments").select("document_id, driver_id").eq("driver_id", driverId),
+    db.from("hr_document_assignments").select(ASSIGNMENT_SELECT).eq("driver_id", driverId),
     db
       .from("hr_signatures")
       .select(SIGNATURE_SELECT)
@@ -333,7 +342,7 @@ async function loadDriverViews(driverId: string): Promise<DriverDocumentView[]> 
   return driverDocumentViews(
     driverId,
     (docs.data ?? []).map(rowToHrDocument),
-    (assigns.data ?? []).map((a) => ({ documentId: a.document_id, driverId: a.driver_id })),
+    (assigns.data ?? []).map(rowToHrAssignment),
     (sigs.data ?? []).map(rowToHrSignature),
     new Date(),
   ).sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]);
@@ -353,6 +362,9 @@ export interface SignDocumentInput {
   signedName: string;
   agreed: boolean;
   signatureDataUrl: string;
+  /** Required when the document collects particulars. */
+  legalName?: string;
+  address?: string;
 }
 
 export async function signDocument(
@@ -363,15 +375,29 @@ export async function signDocument(
   try {
     const me = await requireDriver();
     if (input.agreed !== true) return { error: "Please tick the box to confirm you've read the document." };
-    const signedName = (input.signedName ?? "").trim().replace(/\s+/g, " ");
-    if (signedName.length < 2 || signedName.length > 100) {
-      return { error: "Please type your full name." };
-    }
     const signaturePng = parseSignatureDataUrl(input.signatureDataUrl);
 
     const view = (await loadDriverViews(me.id)).find((v) => v.document.id === input.documentId);
     if (!view) return { error: "This document isn't available to you." };
     if (!needsSignature(view.status)) return { error: "You've already signed this document." };
+
+    // Particulars documents: the confirmed legal name is also the signed name.
+    let particulars: Particulars | null = null;
+    if (view.document.collectsParticulars) {
+      const { legalName, address } = cleanDriverDetails(input.legalName, input.address);
+      const start = view.assignment?.startDate;
+      if (!start) return { error: "The office hasn't set your start date yet. Please contact them." };
+      particulars = {
+        legalName,
+        address,
+        startDate: start,
+        continuousEmploymentDate: view.assignment?.continuousDate ?? start,
+      };
+    }
+    const signedName = particulars?.legalName ?? (input.signedName ?? "").trim().replace(/\s+/g, " ");
+    if (signedName.length < 2 || signedName.length > 100) {
+      return { error: "Please type your full name." };
+    }
 
     const { data: row } = await db
       .from("hr_documents")
@@ -390,7 +416,10 @@ export async function signDocument(
     const signatureId = randomUUID();
     const signedAt = new Date();
 
-    const signedPdf = await appendSignatureCertificate(original, signaturePng, {
+    const withSchedule = particulars
+      ? await appendParticularsSchedule(original, view.document.title, particulars)
+      : original;
+    const signedPdf = await appendSignatureCertificate(withSchedule, signaturePng, {
       signatureId,
       documentTitle: view.document.title,
       documentCategory: categoryLabel(view.document.category),
@@ -427,6 +456,7 @@ export async function signDocument(
       signed_pdf_path: pdfPath,
       signed_pdf_sha256: sha256Hex(signedPdf),
       signature_image_path: pngPath,
+      particulars,
       ip_address: ipAddress,
       user_agent: userAgent,
       signed_at: signedAt.toISOString(),

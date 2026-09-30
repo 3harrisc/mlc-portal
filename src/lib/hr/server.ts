@@ -63,6 +63,8 @@ export async function requestMeta(): Promise<{ ipAddress: string | null; userAge
   };
 }
 
+export const ASSIGNMENT_SELECT = "document_id, driver_id, start_date, continuous_employment_date";
+
 /** Signature columns plus the embedded countersignature, if any. */
 export const SIGNATURE_SELECT =
   "id, document_id, driver_id, signed_name, signed_at, hr_countersignatures(signer_name, signer_title, signed_at)";

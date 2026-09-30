@@ -7,6 +7,7 @@ import { useAuth } from "@/components/AuthProvider";
 import SignaturePad, { type SignaturePadHandle } from "@/components/hr/SignaturePad";
 import { getDocumentUrl, getSignedCopyUrl, listMyDocuments, signDocument } from "@/app/actions/hr";
 import { needsSignature } from "@/lib/hr/status";
+import { ukDate } from "@/lib/hr/format";
 import { AGREEMENT_TEXT, categoryLabel, type DriverDocumentView } from "@/types/hr";
 
 export default function SignDocumentPage() {
@@ -18,6 +19,7 @@ export default function SignDocumentPage() {
   const [opened, setOpened] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
   const [hasInk, setHasInk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +29,12 @@ export default function SignDocumentPage() {
     if (profile?.role !== "driver") return;
     listMyDocuments().then((res) => {
       if (res.error) setError(res.error);
-      setView(res.views?.find((v) => v.document.id === id) ?? null);
+      const found = res.views?.find((v) => v.document.id === id) ?? null;
+      setView(found);
+      // Particulars documents confirm the legal name, so start from the account name.
+      if (found?.document.collectsParticulars && profile.full_name) {
+        setName((n) => n || profile.full_name || "");
+      }
     });
   }, [profile, id]);
 
@@ -55,6 +62,8 @@ export default function SignDocumentPage() {
       signedName: name,
       agreed,
       signatureDataUrl: dataUrl,
+      legalName: name,
+      address,
     });
     setBusy(false);
     if (res.error) setError(res.error);
@@ -113,7 +122,10 @@ export default function SignDocumentPage() {
   }
 
   const canSign = needsSignature(view.status);
-  const ready = opened && agreed && name.trim().length >= 2 && hasInk && !busy;
+  const needsDetails = view.document.collectsParticulars;
+  const ready =
+    opened && agreed && name.trim().length >= 2 && hasInk && !busy &&
+    (!needsDetails || (address.trim().length >= 8 && !!view.assignment?.startDate));
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -162,9 +174,26 @@ export default function SignDocumentPage() {
               <span>{AGREEMENT_TEXT}</span>
             </label>
 
+            {needsDetails && (
+              <div className="rounded-xl border border-white/10 p-3 space-y-1 text-sm">
+                <div className="text-xs text-gray-400">Set by MLC</div>
+                <div>
+                  Start date:{" "}
+                  <b>{view.assignment?.startDate ? ukDate(view.assignment.startDate) : "not set yet"}</b>
+                </div>
+                {view.assignment?.continuousDate &&
+                  view.assignment.continuousDate !== view.assignment.startDate && (
+                    <div>
+                      Continuous employment from: <b>{ukDate(view.assignment.continuousDate)}</b>
+                    </div>
+                  )}
+                <div className="text-xs text-gray-500">If this is wrong, contact the office before signing.</div>
+              </div>
+            )}
+
             <div>
               <label className="text-xs text-gray-400" htmlFor="signed-name">
-                Type your full name
+                {needsDetails ? "Your full legal name (as on your passport or driving licence)" : "Type your full name"}
               </label>
               <input
                 id="signed-name"
@@ -177,6 +206,24 @@ export default function SignDocumentPage() {
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
+
+            {needsDetails && (
+              <div>
+                <label className="text-xs text-gray-400" htmlFor="home-address">
+                  Your home address, including postcode
+                </label>
+                <textarea
+                  id="home-address"
+                  className="mt-1 w-full rounded-xl border border-white/20 bg-black px-3 py-3 text-base"
+                  rows={3}
+                  value={address}
+                  disabled={!opened}
+                  maxLength={300}
+                  autoComplete="street-address"
+                  onChange={(e) => setAddress(e.target.value)}
+                />
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between">

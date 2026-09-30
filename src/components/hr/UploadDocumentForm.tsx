@@ -24,6 +24,8 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
   const [publish, setPublish] = useState(true);
   // Contracts need MLC's signature too; policies and H&S documents usually don't.
   const [countersign, setCountersign] = useState(true);
+  // Blank contract: sent per driver later, with a Schedule of Particulars.
+  const [particulars, setParticulars] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +53,7 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
     setError(null);
     if (!file) return setError("Choose a PDF to upload.");
     if (!title.trim()) return setError("Give the document a title.");
-    if (audience === "selected" && driverIds.length === 0) return setError("Pick at least one driver.");
+    if (!particulars && audience === "selected" && driverIds.length === 0) return setError("Pick at least one driver.");
     const resignMonths = resign ? Number(resign) : null;
 
     setBusy(true);
@@ -71,9 +73,10 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
         category,
         description,
         audience,
-        driverIds: audience === "selected" ? driverIds : [],
+        driverIds: !particulars && audience === "selected" ? driverIds : [],
         resignMonths,
         requiresCountersign: countersign,
+        collectsParticulars: particulars,
         publish,
       });
       if (res.error) throw new Error(res.error);
@@ -122,6 +125,7 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
               const c = e.target.value as HrCategory;
               setCategory(c);
               setCountersign(c === "contract");
+              setParticulars(c === "contract");
             }}
           >
             {HR_CATEGORIES.map((c) => (
@@ -140,6 +144,21 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
             placeholder="e.g. Please read the manual handling section carefully"
           />
         </div>
+        <label className="row gap-8" style={{ gridColumn: "span 2", fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={particulars} onChange={(e) => setParticulars(e.target.checked)} />
+          Blank contract with a Schedule of Particulars: the driver confirms their name and address, MLC
+          sets the start date
+        </label>
+
+        {particulars ? (
+          <div className="field">
+            <label>Who needs to sign</label>
+            <div className="muted" style={{ fontSize: 12, paddingTop: 6 }}>
+              After uploading, use <b>Send to driver</b> on the document to send it to each driver with
+              their start date.
+            </div>
+          </div>
+        ) : (
         <div className="field">
           <label>Who needs to sign</label>
           <select
@@ -151,6 +170,7 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
             <option value="selected">Selected drivers only</option>
           </select>
         </div>
+        )}
         <div className="field">
           <label>Re-sign every</label>
           <select className="select" value={resign} onChange={(e) => setResign(e.target.value)}>
@@ -162,7 +182,7 @@ export default function UploadDocumentForm({ drivers, onDone, onCancel }: Props)
           </select>
         </div>
 
-        {audience === "selected" && (
+        {!particulars && audience === "selected" && (
           <div className="field" style={{ gridColumn: "span 2" }}>
             <label>Drivers ({driverIds.length} selected)</label>
             <div

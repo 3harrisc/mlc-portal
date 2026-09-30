@@ -22,6 +22,7 @@ const doc = (over: Partial<HrDocument> = {}): HrDocument => ({
   resignMonths: null,
   status: "published",
   requiresCountersign: false,
+  collectsParticulars: false,
   createdAt: "2026-01-01T00:00:00Z",
   publishedAt: "2026-01-01T00:00:00Z",
   ...over,
@@ -92,7 +93,7 @@ describe("appliesToDriver", () => {
 
   it("applies 'selected' documents only to assigned drivers", () => {
     const d = doc({ audience: "selected" });
-    const assignments = [{ documentId: "doc-1", driverId: "drv-1" }];
+    const assignments = [{ documentId: "doc-1", driverId: "drv-1", startDate: null, continuousDate: null }];
     expect(appliesToDriver(d, "drv-1", assignments)).toBe(true);
     expect(appliesToDriver(d, "drv-2", assignments)).toBe(false);
   });

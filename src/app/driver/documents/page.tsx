@@ -114,6 +114,13 @@ export default function DriverDocumentsPage() {
                         Signed {v.lastSignature && ukDate(v.lastSignature.signedAt)}
                         {v.expiresAt && ` · re-sign by ${ukDate(v.expiresAt)}`}
                       </div>
+                      {v.document.requiresCountersign && v.lastSignature && (
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {v.lastSignature.countersign
+                            ? `Countersigned by ${v.lastSignature.countersign.signerName}, ${v.lastSignature.countersign.signerTitle}`
+                            : "Waiting for MLC to countersign"}
+                        </div>
+                      )}
                     </div>
                     <span className={`shrink-0 rounded-lg border px-2 py-1 text-xs font-semibold ${BADGE.signed.cls}`}>
                       ✓ Signed

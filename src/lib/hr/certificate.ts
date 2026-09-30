@@ -92,16 +92,20 @@ function ukTime(d: Date): string {
   }).format(d);
 }
 
-/**
- * Append a signature certificate page to the original PDF. The original
- * pages are copied untouched; only a new final page is added.
- */
-export async function appendSignatureCertificate(
-  originalPdf: Uint8Array,
+interface CertificatePage {
+  heading: string;
+  fields: [label: string, value: string][];
+  declaration: string;
+  verification: string[];
+}
+
+/** Append one A4 certificate page. The existing pages are left untouched. */
+async function appendCertificatePage(
+  inputPdf: Uint8Array,
   signaturePng: Uint8Array,
-  info: CertificateInfo,
+  content: CertificatePage,
 ): Promise<Uint8Array> {
-  const pdf = await PDFDocument.load(originalPdf);
+  const pdf = await PDFDocument.load(inputPdf);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const sig = await pdf.embedPng(signaturePng);
@@ -122,13 +126,10 @@ export async function appendSignatureCertificate(
     }
     y -= opts.gap ?? 0;
   };
-  const field = (label: string, value: string) => {
-    text(label.toUpperCase(), { size: 7.5, f: bold, color: muted });
-    text(value, { size: 10.5, gap: 8 });
-  };
+  const label = (s: string, gap = 0) => text(s.toUpperCase(), { size: 7.5, f: bold, color: muted, gap });
 
   text("MLC TRANSPORT", { size: 9, f: bold, color: muted, gap: 2 });
-  text("Electronic Signature Certificate", { size: 20, f: bold, gap: 6 });
+  text(content.heading, { size: 20, f: bold, gap: 6 });
   page.drawLine({
     start: { x: margin, y },
     end: { x: margin + width, y },
@@ -137,19 +138,15 @@ export async function appendSignatureCertificate(
   });
   y -= 18;
 
-  field("Document", info.documentTitle);
-  field("Category", info.documentCategory);
-  field("Signed by (typed name)", info.signedName);
-  field("Driver account", info.driverName ? `${info.driverName} <${info.driverEmail}>` : info.driverEmail);
-  field("Signed at (UK time)", ukTime(info.signedAt));
-  field("Signed at (UTC)", info.signedAt.toISOString());
-  field("IP address", info.ipAddress || "Not recorded");
-  field("Device", info.userAgent || "Not recorded");
+  for (const [l, v] of content.fields) {
+    label(l);
+    text(v, { size: 10.5, gap: 8 });
+  }
 
-  text("DECLARATION", { size: 7.5, f: bold, color: muted });
-  text(info.agreementText, { size: 10.5, gap: 12 });
+  label("Declaration");
+  text(content.declaration, { size: 10.5, gap: 12 });
 
-  text("SIGNATURE", { size: 7.5, f: bold, color: muted, gap: 2 });
+  label("Signature", 2);
   const boxH = 90;
   const scale = Math.min(width / sig.width, boxH / sig.height, 1);
   page.drawRectangle({
@@ -168,10 +165,81 @@ export async function appendSignatureCertificate(
   });
   y -= boxH + 28;
 
-  text("VERIFICATION", { size: 7.5, f: bold, color: muted });
-  text(`SHA-256 of the document as signed: ${info.documentSha256}`, { size: 8, color: muted });
-  text(`Document ID: ${info.documentId}`, { size: 8, color: muted });
-  text(`Signature reference: ${info.signatureId}`, { size: 8, color: muted });
+  label("Verification");
+  for (const line of content.verification) text(line, { size: 8, color: muted });
 
   return pdf.save();
+}
+
+function timeFields(at: Date, ip: string | null, ua: string | null): [string, string][] {
+  return [
+    ["Signed at (UK time)", ukTime(at)],
+    ["Signed at (UTC)", at.toISOString()],
+    ["IP address", ip || "Not recorded"],
+    ["Device", ua || "Not recorded"],
+  ];
+}
+
+/** Driver signature: certificate page appended to the original PDF. */
+export async function appendSignatureCertificate(
+  originalPdf: Uint8Array,
+  signaturePng: Uint8Array,
+  info: CertificateInfo,
+): Promise<Uint8Array> {
+  return appendCertificatePage(originalPdf, signaturePng, {
+    heading: "Electronic Signature Certificate",
+    fields: [
+      ["Document", info.documentTitle],
+      ["Category", info.documentCategory],
+      ["Signed by (typed name)", info.signedName],
+      ["Driver account", info.driverName ? `${info.driverName} <${info.driverEmail}>` : info.driverEmail],
+      ...timeFields(info.signedAt, info.ipAddress, info.userAgent),
+    ],
+    declaration: info.agreementText,
+    verification: [
+      `SHA-256 of the document as signed: ${info.documentSha256}`,
+      `Document ID: ${info.documentId}`,
+      `Signature reference: ${info.signatureId}`,
+    ],
+  });
+}
+
+export interface CountersignInfo {
+  countersignatureId: string;
+  driverSignatureId: string;
+  documentTitle: string;
+  signerName: string;
+  signerTitle: string;
+  signerEmail: string;
+  driverSignedName: string;
+  signedAt: Date;
+  ipAddress: string | null;
+  userAgent: string | null;
+  agreementText: string;
+  /** SHA-256 of the driver-signed PDF this countersignature is applied to. */
+  inputSha256: string;
+}
+
+/** MLC countersignature: a second certificate page after the driver's. */
+export async function appendCountersignCertificate(
+  driverSignedPdf: Uint8Array,
+  signaturePng: Uint8Array,
+  info: CountersignInfo,
+): Promise<Uint8Array> {
+  return appendCertificatePage(driverSignedPdf, signaturePng, {
+    heading: "Countersignature Certificate",
+    fields: [
+      ["Document", info.documentTitle],
+      ["Signed for MLC Transport Ltd by", `${info.signerName}, ${info.signerTitle}`],
+      ["Signing account", info.signerEmail],
+      ["Countersigns the signature of", info.driverSignedName],
+      ...timeFields(info.signedAt, info.ipAddress, info.userAgent),
+    ],
+    declaration: info.agreementText,
+    verification: [
+      `SHA-256 of the driver-signed document: ${info.inputSha256}`,
+      `Driver signature reference: ${info.driverSignatureId}`,
+      `Countersignature reference: ${info.countersignatureId}`,
+    ],
+  });
 }

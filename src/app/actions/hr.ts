@@ -1,9 +1,19 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { headers } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import {
+  HR_BUCKET,
+  SIGNATURE_SELECT,
+  URL_TTL_SECONDS,
+  downloadHrFile,
+  errorMessage,
+  getSessionProfile,
+  requestMeta,
+  requireAdmin,
+  requireDriver,
+  type SessionProfile,
+} from "@/lib/hr/server";
 import {
   AGREEMENT_TEXT,
   HR_CATEGORIES,
@@ -31,58 +41,8 @@ import {
   sha256Hex,
 } from "@/lib/hr/certificate";
 
-// All HR writes use the service role after an explicit role check below;
-// the tables have read-only RLS and the bucket has no storage policies.
-
-const BUCKET = "hr-documents";
-const URL_TTL_SECONDS = 10 * 60;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UPLOAD_PATH_RE = /^documents\/[0-9a-f-]{36}\.pdf$/i;
-
-interface SessionProfile {
-  id: string;
-  email: string;
-  full_name: string | null;
-  role: "admin" | "customer" | "driver";
-  active: boolean;
-}
-
-async function getSessionProfile(): Promise<SessionProfile> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id, email, full_name, role, active")
-    .eq("id", user.id)
-    .single();
-  if (!profile || !profile.active) throw new Error("Account not active");
-  return profile as SessionProfile;
-}
-
-async function requireAdmin(): Promise<SessionProfile> {
-  const p = await getSessionProfile();
-  if (p.role !== "admin") throw new Error("Admin role required");
-  return p;
-}
-
-async function requireDriver(): Promise<SessionProfile> {
-  const p = await getSessionProfile();
-  if (p.role !== "driver") throw new Error("Driver role required");
-  return p;
-}
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-async function download(path: string): Promise<Uint8Array> {
-  const { data, error } = await getSupabaseAdmin().storage.from(BUCKET).download(path);
-  if (error || !data) throw new Error("Couldn't read the stored file");
-  return new Uint8Array(await data.arrayBuffer());
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Admin
@@ -102,7 +62,7 @@ export async function listHrOverview(): Promise<{ data?: HrOverview; error?: str
     const [docs, assigns, sigs, drivers] = await Promise.all([
       db.from("hr_documents").select("*").order("created_at", { ascending: false }),
       db.from("hr_document_assignments").select("document_id, driver_id"),
-      db.from("hr_signatures").select("id, document_id, driver_id, signed_name, signed_at"),
+      db.from("hr_signatures").select(SIGNATURE_SELECT),
       db
         .from("profiles")
         .select("id, email, full_name, active")
@@ -141,7 +101,7 @@ export async function createDocumentUpload(
     if (!/\.pdf$/i.test(fileName)) return { error: "Only PDF files can be uploaded." };
     const path = `documents/${randomUUID()}.pdf`;
     const { data, error } = await getSupabaseAdmin()
-      .storage.from(BUCKET)
+      .storage.from(HR_BUCKET)
       .createSignedUploadUrl(path);
     if (error || !data) return { error: error?.message ?? "Couldn't start upload" };
     return { path, token: data.token };
@@ -159,6 +119,7 @@ export interface FinalizeDocumentInput {
   audience: HrAudience;
   driverIds: string[];
   resignMonths: number | null;
+  requiresCountersign: boolean;
   publish: boolean;
 }
 
@@ -173,7 +134,7 @@ export async function finalizeDocument(
     return { error: errorMessage(e) };
   }
   const db = getSupabaseAdmin();
-  const discard = () => db.storage.from(BUCKET).remove([input.path]);
+  const discard = () => db.storage.from(HR_BUCKET).remove([input.path]);
 
   if (!UPLOAD_PATH_RE.test(input.path)) return { error: "Invalid upload path" };
   const title = input.title?.trim() ?? "";
@@ -201,7 +162,7 @@ export async function finalizeDocument(
   }
 
   try {
-    const bytes = await download(input.path);
+    const bytes = await downloadHrFile(input.path);
     if (!looksLikePdf(bytes)) throw new Error("That file isn't a PDF.");
     await assertSignablePdf(bytes);
 
@@ -218,6 +179,7 @@ export async function finalizeDocument(
         file_sha256: sha256Hex(bytes),
         audience: input.audience,
         resign_months: resign,
+        requires_countersign: input.requiresCountersign === true,
         status: input.publish ? "published" : "draft",
         published_at: input.publish ? now : null,
         created_by: admin.id,
@@ -287,7 +249,7 @@ export async function deleteDraftDocument(id: string): Promise<{ error?: string 
     if (doc.status !== "draft") return { error: "Only drafts can be deleted — archive it instead." };
     const { error } = await db.from("hr_documents").delete().eq("id", id);
     if (error) return { error: error.message };
-    await db.storage.from(BUCKET).remove([doc.storage_path]);
+    await db.storage.from(HR_BUCKET).remove([doc.storage_path]);
     return {};
   } catch (e) {
     return { error: errorMessage(e) };
@@ -317,7 +279,7 @@ export async function getDocumentUrl(documentId: string): Promise<{ url?: string
     }
 
     const { data, error } = await db.storage
-      .from(BUCKET)
+      .from(HR_BUCKET)
       .createSignedUrl(row.storage_path, URL_TTL_SECONDS);
     if (error || !data) return { error: error?.message ?? "Couldn't open document" };
     return { url: data.signedUrl };
@@ -332,14 +294,19 @@ export async function getSignedCopyUrl(signatureId: string): Promise<{ url?: str
     const db = getSupabaseAdmin();
     const { data: row } = await db
       .from("hr_signatures")
-      .select("driver_id, signed_pdf_path")
+      .select("driver_id, signed_pdf_path, hr_countersignatures(countersigned_pdf_path)")
       .eq("id", signatureId)
       .single();
     if (!row) return { error: "Signature not found" };
     if (me.role !== "admin" && row.driver_id !== me.id) return { error: "Not authorized" };
+    // Once MLC has countersigned, the countersigned PDF is the complete copy.
+    const cs = Array.isArray(row.hr_countersignatures)
+      ? row.hr_countersignatures[0]
+      : row.hr_countersignatures;
+    const path: string = cs?.countersigned_pdf_path ?? row.signed_pdf_path;
     const { data, error } = await db.storage
-      .from(BUCKET)
-      .createSignedUrl(row.signed_pdf_path, URL_TTL_SECONDS, { download: true });
+      .from(HR_BUCKET)
+      .createSignedUrl(path, URL_TTL_SECONDS, { download: true });
     if (error || !data) return { error: error?.message ?? "Couldn't open signed copy" };
     return { url: data.signedUrl };
   } catch (e) {
@@ -358,7 +325,7 @@ async function loadDriverViews(driverId: string): Promise<DriverDocumentView[]> 
     db.from("hr_document_assignments").select("document_id, driver_id").eq("driver_id", driverId),
     db
       .from("hr_signatures")
-      .select("id, document_id, driver_id, signed_name, signed_at")
+      .select(SIGNATURE_SELECT)
       .eq("driver_id", driverId),
   ]);
   const failed = [docs, assigns, sigs].find((r) => r.error);
@@ -413,16 +380,13 @@ export async function signDocument(
       .single();
     if (!row) return { error: "Document not found" };
 
-    const original = await download(row.storage_path);
+    const original = await downloadHrFile(row.storage_path);
     const documentSha256 = sha256Hex(original);
     if (documentSha256 !== row.file_sha256) {
       return { error: "This document failed an integrity check. Please tell the office." };
     }
 
-    const h = await headers();
-    const ipAddress =
-      h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
-    const userAgent = h.get("user-agent")?.slice(0, 500) || null;
+    const { ipAddress, userAgent } = await requestMeta();
     const signatureId = randomUUID();
     const signedAt = new Date();
 
@@ -444,7 +408,7 @@ export async function signDocument(
     const pdfPath = `signed/${me.id}/${signatureId}.pdf`;
     const pngPath = `signatures/${me.id}/${signatureId}.png`;
     const store = async (path: string, bytes: Uint8Array, contentType: string) => {
-      const { error } = await db.storage.from(BUCKET).upload(path, bytes, { contentType });
+      const { error } = await db.storage.from(HR_BUCKET).upload(path, bytes, { contentType });
       if (error) throw new Error(`Couldn't store signed copy: ${error.message}`);
       uploaded.push(path);
     };
@@ -470,7 +434,7 @@ export async function signDocument(
     if (error) throw new Error(error.message);
     return { signatureId };
   } catch (e) {
-    if (uploaded.length) await db.storage.from(BUCKET).remove(uploaded);
+    if (uploaded.length) await db.storage.from(HR_BUCKET).remove(uploaded);
     return { error: errorMessage(e) };
   }
 }

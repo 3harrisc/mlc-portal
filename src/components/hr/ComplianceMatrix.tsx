@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { driverDocumentViews } from "@/lib/hr/status";
+import { awaitingCountersign, driverDocumentViews } from "@/lib/hr/status";
 import type { HrOverview } from "@/app/actions/hr";
 import type { SignStatus } from "@/types/hr";
 
@@ -85,8 +85,11 @@ export default function ComplianceMatrix({ overview, onOpenSigned }: Props) {
                     </td>
                   );
                 }
-                const pill = STATUS_PILL[view.status];
                 const sig = view.lastSignature;
+                const pill =
+                  view.status !== "expired" && awaitingCountersign(d, sig)
+                    ? { label: "Awaiting MLC", cls: "delayed" }
+                    : STATUS_PILL[view.status];
                 return (
                   <td key={d.id}>
                     {sig ? (

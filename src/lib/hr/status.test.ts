@@ -3,7 +3,9 @@ import {
   addMonths,
   appliesToDriver,
   driverDocumentViews,
+  awaitingCountersign,
   latestSignatures,
+  pendingCountersigns,
   signStatus,
 } from "./status";
 import type { HrDocument, HrSignature } from "@/types/hr";
@@ -19,6 +21,7 @@ const doc = (over: Partial<HrDocument> = {}): HrDocument => ({
   audience: "all",
   resignMonths: null,
   status: "published",
+  requiresCountersign: false,
   createdAt: "2026-01-01T00:00:00Z",
   publishedAt: "2026-01-01T00:00:00Z",
   ...over,
@@ -30,6 +33,7 @@ const sig = (over: Partial<HrSignature> = {}): HrSignature => ({
   driverId: "drv-1",
   signedName: "Sam Driver",
   signedAt: "2026-01-10T09:00:00Z",
+  countersign: null,
   ...over,
 });
 
@@ -126,5 +130,38 @@ describe("driverDocumentViews", () => {
       ["doc-1", "signed"],
       ["doc-3", "expired"],
     ]);
+  });
+});
+
+describe("countersigning", () => {
+  const contract = doc({ id: "contract", category: "contract", requiresCountersign: true });
+  const countersign = { signerName: "David Harris", signerTitle: "Company Director", signedAt: "2026-02-01T00:00:00Z" };
+
+  it("only waits on documents that need it, once the driver has signed", () => {
+    expect(awaitingCountersign(contract, null)).toBe(false);
+    expect(awaitingCountersign(contract, sig({ documentId: "contract" }))).toBe(true);
+    expect(awaitingCountersign(contract, sig({ documentId: "contract", countersign }))).toBe(false);
+    expect(awaitingCountersign(doc(), sig())).toBe(false);
+  });
+
+  it("queues the latest signature per driver, oldest first, for live documents only", () => {
+    const queue = pendingCountersigns(
+      [contract, doc({ id: "old", requiresCountersign: true, status: "archived" })],
+      [
+        sig({ id: "b", documentId: "contract", driverId: "drv-2", signedAt: "2026-03-01T00:00:00Z" }),
+        sig({ id: "a", documentId: "contract", driverId: "drv-1", signedAt: "2026-02-01T00:00:00Z" }),
+        sig({ id: "done", documentId: "contract", driverId: "drv-3", countersign }),
+        sig({ id: "archived", documentId: "old" }),
+      ],
+    );
+    expect(queue.map((q) => q.signature.id)).toEqual(["a", "b"]);
+  });
+
+  it("drops a driver from the queue once a newer signature is countersigned", () => {
+    const queue = pendingCountersigns([contract], [
+      sig({ id: "old", documentId: "contract", signedAt: "2025-01-01T00:00:00Z" }),
+      sig({ id: "new", documentId: "contract", signedAt: "2026-01-01T00:00:00Z", countersign }),
+    ]);
+    expect(queue).toEqual([]);
   });
 });

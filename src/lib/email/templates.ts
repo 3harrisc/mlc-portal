@@ -20,7 +20,7 @@ interface RenderedEmail {
 const BRAND_BG = "#0B2A6B";
 const ACCENT = "#D81E2A";
 
-function shellHtml(title: string, bodyHtml: string, footerHtml = ""): string {
+export function shellHtml(title: string, bodyHtml: string, footerHtml = ""): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
 <body style="margin:0;padding:0;background:#F6F7F9;font-family:Inter,Helvetica,Arial,sans-serif;color:#0E1320;">
@@ -48,7 +48,7 @@ function kvRow(k: string, v: string): string {
   </tr>`;
 }
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

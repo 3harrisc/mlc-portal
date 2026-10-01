@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import Icon from "@/components/portal/Icon";
+import HrTodoList from "@/components/hr/HrTodoList";
 import { listDriverRecords } from "@/app/actions/hr-drivers";
 import { listHrOverview, type HrOverview } from "@/app/actions/hr";
 import { driverDocumentViews } from "@/lib/hr/status";
@@ -65,6 +66,7 @@ export default function DriverRecordsPage() {
         </Link>
       </div>
       {error && <div className="card" style={{ marginBottom: 12, color: "var(--err)" }}><div className="card-body">{error}</div></div>}
+      <HrTodoList />
       <div className="table-wrap">
         <div className="table-toolbar">
           <label className="row gap-4" style={{ fontSize: 12, cursor: "pointer" }}>

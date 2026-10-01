@@ -8,7 +8,13 @@ import type { AssistantMode } from "@/lib/hr/assistant/notes";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const MODEL = "claude-opus-5-5";
+// Sonnet for everyday drafting; Opus for the "is this legally right?" review,
+// where catching a subtle problem matters most.
+const MODELS: Record<AssistantMode, string> = {
+  draft: "claude-sonnet-5-5",
+  revise: "claude-sonnet-5-5",
+  review: "claude-opus-5-5",
+};
 const MAX_CONTINUATIONS = 4;
 const OFFICIAL_SOURCES = ["gov.uk", "legislation.gov.uk", "hse.gov.uk", "acas.org.uk", "ico.org.uk"];
 
@@ -115,7 +121,7 @@ export async function POST(req: Request) {
 
         for (let turn = 0; turn <= MAX_CONTINUATIONS; turn++) {
           const run = client.beta.messages.stream({
-            model: MODEL,
+            model: MODELS[body.mode],
             max_tokens: 64000,
             thinking: { type: "adaptive" },
             output_config: { effort: "high" },
@@ -168,7 +174,7 @@ export async function POST(req: Request) {
             request: body.request || "(review)",
             document_id: documentId,
             output,
-            model: MODEL,
+            model: MODELS[body.mode],
             stop_reason: stopReason,
             input_tokens: inputTokens,
             output_tokens: outputTokens,

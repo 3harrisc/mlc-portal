@@ -159,9 +159,10 @@ export async function finalizeDocument(
   // Particulars documents are sent driver-by-driver with a start date, so they
   // are always "selected" and may be uploaded with nobody assigned yet.
   if (particulars) input.audience = "selected";
-  if (!driverIds.every((id) => UUID_RE.test(id)) || (input.audience === "selected" && !particulars && driverIds.length === 0)) {
+  // A "selected" document may start with nobody assigned and be sent later via "Send to driver".
+  if (!driverIds.every((id) => UUID_RE.test(id))) {
     await discard();
-    return { error: "Pick at least one driver." };
+    return { error: "Invalid driver selection." };
   }
   const resign = input.resignMonths;
   if (resign != null && (!Number.isInteger(resign) || resign < 1 || resign > 120)) {

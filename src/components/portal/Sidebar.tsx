@@ -48,6 +48,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/depots", icon: "pin", label: "Depots" },
   { href: "/admin/drivers", icon: "user", label: "Drivers" },
   { href: "/admin/hr", icon: "doc", label: "HR documents" },
+  { href: "/admin/hr/assistant", icon: "help", label: "HR assistant" },
   { href: "/admin/users", icon: "settings", label: "Admin users" },
 ];
 

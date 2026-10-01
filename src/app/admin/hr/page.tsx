@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import Icon from "@/components/portal/Icon";
@@ -114,6 +115,9 @@ export default function AdminHrPage() {
           </div>
         </div>
         <div className="row gap-8">
+          <Link className="btn" href="/admin/hr/assistant">
+            <Icon name="help" size={13} /> HR assistant
+          </Link>
           <button className="btn" type="button" onClick={() => load()}>
             <Icon name="refresh" size={13} /> Refresh
           </button>

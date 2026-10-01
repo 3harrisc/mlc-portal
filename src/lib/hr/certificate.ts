@@ -61,7 +61,7 @@ export function pdfSafeText(font: PDFFont, text: string): string {
   return out;
 }
 
-function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+export function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
   const lines: string[] = [];
   let line = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {

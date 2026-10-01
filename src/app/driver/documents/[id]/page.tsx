@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import SignaturePad, { type SignaturePadHandle } from "@/components/hr/SignaturePad";
 import { getDocumentUrl, getSignedCopyUrl, listMyDocuments, signDocument } from "@/app/actions/hr";
+import { getMyDriverDetails } from "@/app/actions/hr-drivers";
 import { needsSignature } from "@/lib/hr/status";
 import { ukDate } from "@/lib/hr/format";
 import { AGREEMENT_TEXT, categoryLabel, type DriverDocumentView } from "@/types/hr";
@@ -31,9 +32,13 @@ export default function SignDocumentPage() {
       if (res.error) setError(res.error);
       const found = res.views?.find((v) => v.document.id === id) ?? null;
       setView(found);
-      // Particulars documents confirm the legal name, so start from the account name.
-      if (found?.document.collectsParticulars && profile.full_name) {
-        setName((n) => n || profile.full_name || "");
+      // Particulars documents: pre-fill from the driver's HR record (the driver
+      // confirms or corrects), falling back to the account name.
+      if (found?.document.collectsParticulars) {
+        getMyDriverDetails().then((me) => {
+          setName((n) => n || me.legalName || profile.full_name || "");
+          setAddress((a) => a || me.address || "");
+        });
       }
     });
   }, [profile, id]);
@@ -210,7 +215,7 @@ export default function SignDocumentPage() {
             {needsDetails && (
               <div>
                 <label className="text-xs text-gray-400" htmlFor="home-address">
-                  Your home address, including postcode
+                  Your home address, including postcode (correct it if it has changed)
                 </label>
                 <textarea
                   id="home-address"

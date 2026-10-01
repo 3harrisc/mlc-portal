@@ -10,15 +10,18 @@ import LicenceCheckDrop from "@/components/hr/drivers/LicenceCheckDrop";
 import LicencePanel from "@/components/hr/drivers/LicencePanel";
 import DriverDocsPanel from "@/components/hr/drivers/DriverDocsPanel";
 import DriverFilesPanel from "@/components/hr/drivers/DriverFilesPanel";
+import StarterPackPanel from "@/components/hr/drivers/StarterPackPanel";
 import {
   addDriverFile,
   getDriverRecord,
   listDriverRecords,
   saveDriverRecord,
+  sendStarterPack,
   type DriverLogin,
 } from "@/app/actions/hr-drivers";
 import { listHrOverview, type HrOverview } from "@/app/actions/hr";
 import { driverDocumentViews } from "@/lib/hr/status";
+import { driverChecklist } from "@/lib/hr/checklist";
 import { driverFieldsFromLicence, licenceChanges, type LicenceCheck } from "@/lib/hr/licence";
 import { driverName, type DriverFile, type DriverInput, type DriverRecord } from "@/types/hr-drivers";
 
@@ -86,6 +89,29 @@ export default function DriverRecordPage() {
     [driver, overview],
   );
   const changes = pending && driver ? licenceChanges(driver.licence, pending.licence) : [];
+  const checklist = driver ? driverChecklist(driver, files, views) : [];
+  const contractSent = views.some((v) => v.document.collectsParticulars);
+
+  const starterPack = async () => {
+    if (!driver) return;
+    setError(null);
+    setBusy(true);
+    const res = await sendStarterPack(driver.id);
+    setBusy(false);
+    if (res.error) return setError(res.error);
+    showToast(res.sent?.length ? `Sent: ${res.sent.join(", ")}` : "Nothing new to send");
+    load();
+  };
+
+  const markActive = async () => {
+    if (!driver) return;
+    setBusy(true);
+    const res = await saveDriverRecord(driver.id, { ...form, status: "active" });
+    setBusy(false);
+    if (res.error) return setError(res.error);
+    showToast("Marked as active");
+    load();
+  };
 
   const onCheckRead = (path: string, licence: LicenceCheck, fileName: string) => {
     setPending({ path, licence, fileName });
@@ -182,6 +208,19 @@ export default function DriverRecordPage() {
 
           {!isNew && driver && (
             <>
+              <div className="card">
+                <div className="card-header"><h3>Onboarding checklist</h3></div>
+                <div className="card-body">
+                  <StarterPackPanel
+                    items={checklist}
+                    contractSent={contractSent}
+                    isStarter={driver.status === "starter"}
+                    busy={busy}
+                    onSend={starterPack}
+                    onMarkActive={markActive}
+                  />
+                </div>
+              </div>
               <div className="card">
                 <div className="card-header"><h3>Documents to sign</h3></div>
                 <div className="card-body">

@@ -2,7 +2,8 @@
 
 import { randomUUID } from "node:crypto";
 import { getSupabaseAdmin } from "@/lib/supabase";
-import { HR_BUCKET, URL_TTL_SECONDS, downloadHrFile, errorMessage, requireAdmin } from "@/lib/hr/server";
+import { HR_BUCKET, URL_TTL_SECONDS, downloadHrFile, errorMessage, requireAdmin, requireDriver } from "@/lib/hr/server";
+import { assignDocument } from "@/app/actions/hr-assign";
 import { cleanDriverInput } from "@/lib/hr/driver-validate";
 import { sha256Hex } from "@/lib/hr/certificate";
 import { LicenceCheckSchema } from "@/lib/hr/licence";
@@ -156,6 +157,70 @@ export async function getDriverFileUrl(fileId: string): Promise<{ url?: string; 
     const { data, error } = await db.storage.from(HR_BUCKET).createSignedUrl(f.storage_path, URL_TTL_SECONDS);
     if (error || !data) return { error: error?.message ?? "Couldn't open file" };
     return { url: data.signedUrl };
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+}
+
+/**
+ * Starter pack: send every published blank contract (Schedule of
+ * Particulars) to the driver's login with the dates from their record.
+ * "All drivers" documents already apply to them once their login is linked.
+ */
+export async function sendStarterPack(driverId: string): Promise<{ sent?: string[]; error?: string }> {
+  try {
+    await requireAdmin();
+    const db = getSupabaseAdmin();
+    const { data: d } = await db
+      .from("hr_drivers")
+      .select("profile_id, start_date, continuous_employment_date")
+      .eq("id", driverId)
+      .single();
+    if (!d) return { error: "Driver not found" };
+    if (!d.profile_id) return { error: "Link the driver's portal login first." };
+    if (!d.start_date) return { error: "Add the driver's start date first." };
+
+    const { data: contracts } = await db
+      .from("hr_documents")
+      .select("id, title")
+      .eq("status", "published")
+      .eq("collects_particulars", true);
+    if (!contracts?.length) {
+      return { error: "No published blank contract found. Upload the contract template on HR documents and press Send." };
+    }
+
+    const sent: string[] = [];
+    for (const c of contracts) {
+      const res = await assignDocument({
+        documentId: c.id,
+        driverId: d.profile_id,
+        startDate: d.start_date,
+        continuousDate: d.continuous_employment_date ?? undefined,
+      });
+      // Already signed isn't a failure for a starter pack - just skip it.
+      if (res.error && !/already signed/i.test(res.error)) return { error: `${c.title}: ${res.error}` };
+      if (!res.error) sent.push(c.title);
+    }
+    return { sent };
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+}
+
+/** For the signed-in driver: their legal name and address from their record, to pre-fill signing. */
+export async function getMyDriverDetails(): Promise<{ legalName?: string; address?: string; error?: string }> {
+  try {
+    const me = await requireDriver();
+    const { data } = await getSupabaseAdmin()
+      .from("hr_drivers")
+      .select("first_names, surname, address, postcode")
+      .eq("profile_id", me.id)
+      .maybeSingle();
+    if (!data) return {};
+    return {
+      legalName: `${data.first_names} ${data.surname}`.trim(),
+      address: [data.address, data.postcode].filter(Boolean).join(", "),
+    };
   } catch (e) {
     return { error: errorMessage(e) };
   }

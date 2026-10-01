@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useAuth } from "@/components/AuthProvider";
+import HrTodoList from "@/components/hr/HrTodoList";
 import { todayISO } from "@/lib/time-utils";
 import Icon from "@/components/portal/Icon";
 import Sparkline from "@/components/portal/Sparkline";
@@ -62,6 +63,8 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {profile?.role === "admin" && <HrTodoList limit={6} />}
 
       <div className="kpi-grid">
         <KpiTile

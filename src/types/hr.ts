@@ -60,6 +60,8 @@ export interface HrAssignment {
   /** Set by MLC when sending a particulars document (YYYY-MM-DD). */
   startDate: string | null;
   continuousDate: string | null;
+  /** When MLC sent it to this driver. */
+  assignedAt?: string | null;
 }
 
 /** Details printed on the Schedule of Particulars page and stored on the signature. */
@@ -125,6 +127,7 @@ export function rowToHrAssignment(r: any): HrAssignment {
     driverId: r.driver_id,
     startDate: r.start_date ?? null,
     continuousDate: r.continuous_employment_date ?? null,
+    assignedAt: r.assigned_at ?? null,
   };
 }
 

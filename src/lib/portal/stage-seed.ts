@@ -16,6 +16,7 @@ import type { PlannedRun, ProgressState } from "@/types/runs";
 
 export type Stage =
   | { kind: "not-started" }
+  | { kind: "heading-to-collection" }
   | { kind: "at-collection" }
   | { kind: "heading-to"; dropIdx: number }
   | { kind: "on-site"; dropIdx: number }
@@ -27,6 +28,7 @@ export type StageId = string;
 export function stageId(stage: Stage): StageId {
   switch (stage.kind) {
     case "not-started":
+    case "heading-to-collection":
     case "at-collection":
       return stage.kind;
     default:
@@ -39,7 +41,13 @@ export function parseStageId(id: StageId): Stage | null {
   // deliver a number or an object, and id.indexOf would throw a TypeError
   // (a 500 digest) rather than returning a clean "Unknown stage".
   if (typeof id !== "string") return null;
-  if (id === "not-started" || id === "at-collection") return { kind: id };
+  if (
+    id === "not-started" ||
+    id === "heading-to-collection" ||
+    id === "at-collection"
+  ) {
+    return { kind: id };
+  }
 
   const sep = id.indexOf(":");
   if (sep < 0) return null;
@@ -72,7 +80,11 @@ export function parseStageId(id: StageId): Stage | null {
  * the cron and the route plan use.
  */
 export function isStageValidFor(stage: Stage, run: PlannedRun): boolean {
-  if (stage.kind === "not-started" || stage.kind === "at-collection") {
+  if (
+    stage.kind === "not-started" ||
+    stage.kind === "heading-to-collection" ||
+    stage.kind === "at-collection"
+  ) {
     return true;
   }
   const dropCount = parseStops(run.rawText).length;
@@ -93,9 +105,10 @@ function isSeedableDrop(leg: PlanLeg): leg is PlanLeg & { stopIndex: number } {
  * Whether a stage can be seeded for at least one of this plan's drops.
  *
  * A regular load with no rawText gets a synthesised plan whose drop leg has
- * stopIndex null, so listStages can only offer "Not started" and "At
- * collection" — a menu that cannot express delivery at all. Callers use this
- * to hide the control on such loads rather than offer a truncated one.
+ * stopIndex null, so listStages can only offer "Not started", "Heading to
+ * collection" and "At collection" — a menu that cannot express delivery at
+ * all. Callers use this to hide the control on such loads rather than offer
+ * a truncated one.
  */
 export function hasSeedableDrop(plan: RoutePlan): boolean {
   return plan.legs.some(isSeedableDrop);
@@ -110,6 +123,14 @@ export function listStages(plan: RoutePlan): StageOption[] {
 
   const origin = plan.legs.find((l) => l.kind === "origin");
   if (origin) {
+    // The run-in to the pickup. Nothing in progress distinguishes it from
+    // "not started" otherwise, yet it is the stage a shipper asks about most:
+    // "when will the lorry be here?" — so it gets its own option and its own
+    // ETA (collectionEta) on the load page.
+    out.push({
+      id: "heading-to-collection",
+      label: "Heading to collection · " + origin.postcode,
+    });
     out.push({
       id: "at-collection",
       label: "At collection · " + origin.postcode,
@@ -209,6 +230,7 @@ export function seedPatch(
     stillLng: prev?.stillLng ?? null,
     stillSinceMs: prev?.stillSinceMs ?? null,
     stillStopIdx: prev?.stillStopIdx ?? null,
+    collectEnRouteISO: null,
     collectArrivedMs: null,
     collected: false,
     collectDepartedISO: null,
@@ -220,11 +242,30 @@ export function seedPatch(
     return { progress: reconcileStandstill(base, [], nowMs), ...empty };
   }
 
+  // Every stage from here on is at or past setting off for the pickup, so a
+  // real "set off" stamp is history worth keeping (the timeline renders it);
+  // only the heading-to-collection stage asserts one where none exists.
+  const setOff: ProgressState = {
+    ...base,
+    collectEnRouteISO: prev?.collectEnRouteISO ?? null,
+  };
+
+  if (stage.kind === "heading-to-collection") {
+    return {
+      progress: reconcileStandstill(
+        { ...setOff, collectEnRouteISO: prev?.collectEnRouteISO ?? nowISO },
+        [],
+        nowMs,
+      ),
+      ...empty,
+    };
+  }
+
   if (stage.kind === "at-collection") {
     return {
       progress: reconcileStandstill(
         {
-          ...base,
+          ...setOff,
           collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
           collected: true,
         },
@@ -239,7 +280,7 @@ export function seedPatch(
   // pendingDeparture is the cron's chained-run guard; clearing it stops the
   // next cycle holding off tracking because the lorry started at a stop.
   const departed: ProgressState = {
-    ...base,
+    ...setOff,
     collectArrivedMs: prev?.collectArrivedMs ?? nowMs,
     collected: true,
     collectDepartedISO: prev?.collectDepartedISO ?? nowISO,
@@ -322,5 +363,8 @@ export function currentStage(run: PlannedRun, plan: RoutePlan): StageId {
   // no matching <option> leaves the controlled select blank (selectedIndex -1).
   const hasOrigin = plan.legs.some((l) => l.kind === "origin");
   if (hasOrigin && run.progress?.collectArrivedMs != null) return "at-collection";
+  if (hasOrigin && run.progress?.collectEnRouteISO) {
+    return "heading-to-collection";
+  }
   return "not-started";
 }

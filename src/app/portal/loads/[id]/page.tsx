@@ -45,6 +45,7 @@ import PortalMap, {
 import ShareLinkPanel from "@/components/portal/ShareLinkPanel";
 import { useToast } from "@/components/portal/ToastContext";
 import {
+  collectionEta,
   collectionTimes,
   deriveStatus,
   displayDestination,
@@ -478,6 +479,19 @@ function LoadDetailView({
   const eta =
     (usingLiveEta ? liveEta : null) ??
     (chainedInfo ? chainedEta(run, chainedInfo) : quickEta(run));
+  // While the lorry is on its way to the pickup the useful number is the ETA
+  // at the COLLECTION point, not the drop — the drop ETA is just the booked
+  // slot until the load is actually on board. collectionEta is null with no
+  // live fix, in which case the booked collection slot stands in.
+  const headingToCollection = isHeadingToCollection(run);
+  const pickupLiveEta = headingToCollection
+    ? collectionEta(run, { truckPos, coords: coordsMap })
+    : null;
+  const pickupEta =
+    pickupLiveEta ||
+    (run.collectionTime ?? "").trim() ||
+    displayedStart ||
+    "—";
 
   const { mapPins, mapRoutes } = useMemo(
     () =>
@@ -620,21 +634,35 @@ function LoadDetailView({
             </span>
           </div>
         </div>
-        <div className="stat-cell">
-          <div className="l">ETA at next drop</div>
-          <div className="v mono">
-            {status === "delivered" ? "Delivered" : eta}
+        {headingToCollection && status !== "delivered" ? (
+          <div className="stat-cell">
+            <div className="l">ETA at collection</div>
+            <div className="v mono">{pickupEta}</div>
+            <div className="muted" style={{ fontSize: 10.5 }}>
+              {pickupLiveEta
+                ? "live · from vehicle position"
+                : truckPos
+                  ? "booked slot · no coords for pickup yet"
+                  : "booked slot · no vehicle position"}
+            </div>
           </div>
-          {status !== "delivered" && collection.loading ? (
-            <div className="muted" style={{ fontSize: 10.5 }}>
-              loading at collection
+        ) : (
+          <div className="stat-cell">
+            <div className="l">ETA at next drop</div>
+            <div className="v mono">
+              {status === "delivered" ? "Delivered" : eta}
             </div>
-          ) : usingLiveEta ? (
-            <div className="muted" style={{ fontSize: 10.5 }}>
-              live · from vehicle position
-            </div>
-          ) : null}
-        </div>
+            {status !== "delivered" && collection.loading ? (
+              <div className="muted" style={{ fontSize: 10.5 }}>
+                loading at collection
+              </div>
+            ) : usingLiveEta ? (
+              <div className="muted" style={{ fontSize: 10.5 }}>
+                live · from vehicle position
+              </div>
+            ) : null}
+          </div>
+        )}
         <div className="stat-cell">
           <div className="l">Service</div>
           <div className="v" style={{ fontSize: 14 }}>
@@ -1086,6 +1114,22 @@ function LoadDetailView({
 }
 
 /**
+ * True while the lorry is on its way to the pickup: an admin has seeded
+ * "Heading to collection" and the geofence has not yet seen it arrive. Only
+ * ever admin-asserted — the cron cannot tell a lorry heading to our pickup
+ * from one still finishing another job, which is the whole reason the stage
+ * exists. Distinct from isEnRoute, which means loaded and between stops.
+ */
+function isHeadingToCollection(run: PlannedRun): boolean {
+  const p = run.progress;
+  return (
+    !!p?.collectEnRouteISO &&
+    p.collectArrivedMs == null &&
+    !p.collectDepartedISO
+  );
+}
+
+/**
  * True when the lorry is genuinely between stops — it has departed the
  * collection point, or already completed a drop. Drives both the "Heading to"
  * timeline entry and the live ETA projection, so the two can't disagree.
@@ -1172,6 +1216,16 @@ function buildTimeline(
       // collection point, loading whilst on site, then departure.
       const arrivedMs = run.progress?.collectArrivedMs ?? null;
       const departedISO = run.progress?.collectDepartedISO ?? null;
+      const enRouteISO = run.progress?.collectEnRouteISO ?? null;
+      if (enRouteISO) {
+        // Admin-seeded "set off for the pickup". Stays as a done entry once
+        // the lorry arrives, so the timeline keeps the run-in on record.
+        events.push({
+          at: formatLocalIso(enRouteISO),
+          title: `Heading to collection · ${leg.postcode}`,
+          kind: arrivedMs != null ? "ok" : "current",
+        });
+      }
       if (arrivedMs != null) {
         events.push({
           at: formatLocalIso(new Date(arrivedMs).toISOString()),
@@ -1180,7 +1234,7 @@ function buildTimeline(
             : `Loading at ${leg.postcode}`,
           kind: departedISO ? "ok" : "current",
         });
-      } else {
+      } else if (!enRouteISO) {
         events.push({
           at: fallbackAt,
           title: `Start: ${leg.label} at ${leg.postcode}`,

@@ -55,6 +55,7 @@ completion path is *latching* — it only ever advances:
 | `collected` | set true after the dwell threshold, never cleared |
 | `collectDepartedISO` | set once, on departure |
 | `completedIdx` | appended to, never removed from |
+| `collectEnRouteISO` | never written by the cron — admin-only, via this control |
 
 `update-progress/route.ts:308` skips the collection block entirely once
 `collected` and `collectDepartedISO` are both set. A seeded state is therefore
@@ -82,6 +83,7 @@ stages it actually has:
 
 ```
 Not started
+Heading to collection · DN15 8QP
 At collection · DN15 8QP
 Heading to CF83 1BQ
 On site at CF83 1BQ
@@ -118,6 +120,7 @@ A consequence worth knowing: because a real `collectArrivedMs` is preserved, a
 | Stage | Patch applied to `progress` |
 | --- | --- |
 | Not started | `collectArrivedMs=null`, `collected=false`, `collectDepartedISO=null`, `completedIdx=[]`, `onSiteIdx=null`, `onSiteSinceMs=null`, `pendingDeparture=undefined` |
+| Heading to collection | `collectEnRouteISO=now` (kept where already set); everything else as "Not started" |
 | At collection | `collectArrivedMs=now`, `collected=true`, `collectDepartedISO=null` |
 | Heading to drop N (also the state "loaded & departed" describes) | `collectArrivedMs=now`, `collected=true`, `collectDepartedISO=now`; `completedIdx` = every drop before N, each with `completedMeta[i] = { atISO: now, by: "admin" }`; `onSiteIdx=null` |
 | On site at drop N | as "Heading to drop N", plus `onSiteIdx=N`, `onSiteSinceMs=now` |

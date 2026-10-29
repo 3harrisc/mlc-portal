@@ -75,6 +75,11 @@ export type ProgressState = {
   onSiteSinceMs: number | null;
   lastInside: boolean;
   // Backload collection tracking (at fromPostcode)
+  // Admin-asserted "set off for the collection point", stamped by the stage
+  // seed control. The cron never writes it (it cannot tell a lorry heading
+  // to our pickup from one finishing another job); arrival at the collection
+  // point supersedes it, and a "Not started" seed clears it.
+  collectEnRouteISO?: string | null;
   collectArrivedMs?: number | null;
   collectDepartedISO?: string | null;
   collected?: boolean;

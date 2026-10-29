@@ -14,6 +14,12 @@ import { buildRoutePlan } from "./route-plan";
 import type { PlannedRun } from "@/types/runs";
 
 describe("stage id codec", () => {
+  it("round-trips the heading-to-collection stage", () => {
+    const stage: Stage = { kind: "heading-to-collection" };
+    expect(stageId(stage)).toBe("heading-to-collection");
+    expect(parseStageId("heading-to-collection")).toEqual(stage);
+  });
+
   it("round-trips the collection stages", () => {
     for (const k of ["not-started", "at-collection"] as const) {
       expect(parseStageId(stageId({ kind: k }))).toEqual({ kind: k });
@@ -68,6 +74,7 @@ describe("listStages", () => {
     const plan = buildRoutePlan(backload, null);
     expect(listStages(plan).map((o) => o.id)).toEqual([
       "not-started",
+      "heading-to-collection",
       "at-collection",
       "heading-to:0",
       "on-site:0",
@@ -79,6 +86,9 @@ describe("listStages", () => {
     const plan = buildRoutePlan(backload, null);
     const byId = Object.fromEntries(
       listStages(plan).map((o) => [o.id, o.label]),
+    );
+    expect(byId["heading-to-collection"]).toBe(
+      "Heading to collection · DN15 8QP",
     );
     expect(byId["at-collection"]).toBe("At collection · DN15 8QP");
     expect(byId["heading-to:0"]).toBe("Heading to CF83 1BQ");
@@ -92,6 +102,7 @@ describe("listStages", () => {
     );
     expect(listStages(plan).map((o) => o.id)).toEqual([
       "not-started",
+      "heading-to-collection",
       "at-collection",
       "heading-to:0",
       "on-site:0",
@@ -128,6 +139,7 @@ describe("hasSeedableDrop", () => {
     expect(hasSeedableDrop(plan)).toBe(false);
     expect(listStages(plan).map((o) => o.id)).toEqual([
       "not-started",
+      "heading-to-collection",
       "at-collection",
     ]);
   });
@@ -226,6 +238,43 @@ describe("seedPatch", () => {
     expect(s.progress.collectArrivedMs).toBeNull();
     expect(s.progress.collected).toBe(false);
     expect(s.progress.collectDepartedISO).toBeNull();
+  });
+
+  it("heading-to-collection stamps set-off and nothing else", () => {
+    const s = seedPatch({ kind: "heading-to-collection" }, mkRun(), NOW);
+    expect(s.progress.collectEnRouteISO).toBe(NOW);
+    expect(s.progress.collectArrivedMs).toBeNull();
+    expect(s.progress.collected).toBe(false);
+    expect(s.progress.collectDepartedISO).toBeNull();
+    expect(s.completedStopIndexes).toEqual([]);
+    expect(s.completedMeta).toEqual({});
+  });
+
+  it("preserves a real set-off stamp on every forward stage", () => {
+    const run = mkRun({
+      progress: {
+        completedIdx: [],
+        onSiteIdx: null,
+        onSiteSinceMs: null,
+        lastInside: false,
+        collectEnRouteISO: "2026-08-26T08:00:00.000Z",
+      },
+    });
+    const stages: Stage[] = [
+      { kind: "heading-to-collection" },
+      { kind: "at-collection" },
+      { kind: "heading-to", dropIdx: 0 },
+      { kind: "on-site", dropIdx: 1 },
+      { kind: "delivered", dropIdx: 2 },
+    ];
+    for (const stage of stages) {
+      expect(seedPatch(stage, run, NOW).progress.collectEnRouteISO).toBe(
+        "2026-08-26T08:00:00.000Z",
+      );
+    }
+    expect(
+      seedPatch({ kind: "not-started" }, run, NOW).progress.collectEnRouteISO,
+    ).toBeNull();
   });
 
   it("at-collection marks arrived and collected but not departed", () => {
@@ -521,9 +570,27 @@ describe("currentStage", () => {
     expect(currentStage(mkRun(), plan)).toBe("not-started");
   });
 
+  it("arrival at the pickup outranks a set-off stamp", () => {
+    const run = seeded({ kind: "heading-to-collection" });
+    expect(currentStage(run, plan)).toBe("heading-to-collection");
+    // The cron sees the lorry inside the collection radius: latching
+    // collectArrivedMs lands on top of the seeded state.
+    const arrived = mkRun({
+      ...run,
+      progress: { ...run.progress!, collectArrivedMs: NOW_MS },
+    });
+    expect(currentStage(arrived, plan)).toBe("at-collection");
+  });
+
+  it("reads a set-off load with no origin leg as not started", () => {
+    const run = seeded({ kind: "heading-to-collection" }, { fromPostcode: "" });
+    expect(currentStage(run, noOriginPlan)).toBe("not-started");
+  });
+
   it("round-trips the stages that are distinguishable", () => {
     const stages: Stage[] = [
       { kind: "not-started" },
+      { kind: "heading-to-collection" },
       { kind: "at-collection" },
       { kind: "heading-to", dropIdx: 0 },
       { kind: "heading-to", dropIdx: 2 },
